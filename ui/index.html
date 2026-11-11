@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mestisexo</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <section id="home" class="screen">
+    <h1>Mestisexo</h1>
+    <p class="muted">Streaming y chat local, sin servidores externos.</p>
+    <div class="cards">
+      <button class="card" id="go-host"><b>Transmitir</b><span>Recibe la señal de OBS y compártela</span></button>
+      <button class="card" id="go-view"><b>Ver un stream</b><span>Conéctate con el código del streamer</span></button>
+    </div>
+  </section>
+
+  <section id="host-setup" class="screen hidden">
+    <h2>Transmitir</h2>
+    <label>Puerto para espectadores <input id="ws-port" type="number" min="1" max="65535" value="8090"></label>
+    <label>Puerto RTMP (OBS) <input id="rtmp-port" type="number" min="1" max="65535" value="1935"></label>
+    <label>VPS para espectadores (opcional) <input id="vps" placeholder="stream@109.123.252.126" autocomplete="off"></label>
+    <label>Clave SSH del VPS <input id="vps-key" placeholder="~/.ssh/mestisexo_tunnel" autocomplete="off"></label>
+    <div class="row">
+      <button class="back">Volver</button>
+      <button id="start" class="primary">Iniciar sesión</button>
+    </div>
+    <p id="host-error" class="error"></p>
+  </section>
+
+  <section id="view-setup" class="screen hidden">
+    <h2>Ver un stream</h2>
+    <label>Código del stream <input id="code" placeholder="192.168.1.20:8090#AbC123xyz0" autocomplete="off"></label>
+    <label>Tu nombre <input id="name" maxlength="24" placeholder="Anónimo"></label>
+    <div class="row">
+      <button class="back">Volver</button>
+      <button id="join" class="primary">Conectar</button>
+    </div>
+    <p id="view-error" class="error"></p>
+  </section>
+
+  <section id="live" class="hidden">
+    <header>
+      <button id="leave">Salir</button>
+      <span id="badge" class="badge">OFFLINE</span>
+      <span id="viewers">0 espectadores</span>
+      <span id="status" class="muted"></span>
+    </header>
+    <div class="main">
+      <div class="left">
+        <div class="player">
+          <video id="video" autoplay playsinline controls></video>
+          <div id="placeholder">Esperando señal…</div>
+        </div>
+        <div id="host-info" class="info hidden">
+          <div><span>Servidor (OBS)</span><code id="i-rtmp"></code><button data-copy="i-rtmp">Copiar</button></div>
+          <div><span>Clave de stream</span><code id="i-skey" class="secret"></code><button data-copy="i-skey">Copiar</button></div>
+          <div><span>Código para espectadores</span><code id="i-code"></code><button data-copy="i-code">Copiar</button></div>
+          <p id="i-net" class="muted"></p>
+        </div>
+      </div>
+      <aside class="chat">
+        <div class="chat-head">
+          <b>Chat</b>
+          <button id="clear" class="hidden">Vaciar</button>
+        </div>
+        <ul id="messages"></ul>
+        <form id="chat-form">
+          <input id="chat-input" maxlength="300" placeholder="Escribe un mensaje" autocomplete="off">
+          <button>Enviar</button>
+        </form>
+      </aside>
+    </div>
+  </section>
+
+  <script src="app.js"></script>
+</body>
+</html>
