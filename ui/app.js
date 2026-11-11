@@ -183,6 +183,36 @@ async function leave() {
 
 // ---------- Streamer ----------
 
+function pill(id, cls, text, title) {
+  const el = $(id);
+  el.className = `pill ${cls}`;
+  el.textContent = text;
+  el.title = title || "";
+}
+
+function fmtTime(ms) {
+  const t = Math.floor(ms / 1000), h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, s = t % 60;
+  return (h ? `${h}:` : "") + `${String(m).padStart(h ? 2 : 1, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+function renderHealth(st, prev) {
+  const stale = st.live && st.now_ms - st.last_data_ms > 3000;
+  pill("h-obs", st.live ? (stale ? "bad" : "ok") : "warn",
+    st.live ? (stale ? "OBS sin datos" : "OBS conectado") : "Esperando a OBS", st.status);
+
+  let kbps = 0;
+  if (prev && st.now_ms > prev.now_ms && st.bytes_total >= prev.bytes_total)
+    kbps = ((st.bytes_total - prev.bytes_total) * 8) / (st.now_ms - prev.now_ms);
+  pill("h-rate", !st.live ? "" : kbps > 0 ? "ok" : "warn", st.live ? `${Math.round(kbps)} kbps` : "— kbps");
+
+  if (st.tunnel_up === null || st.tunnel_up === undefined) $("h-tunnel").classList.add("hidden");
+  else pill("h-tunnel", st.tunnel_up ? "ok" : "bad", st.tunnel_up ? "VPS conectado" : "VPS caído", st.tunnel);
+
+  $("uptime").classList.toggle("hidden", !st.live_since);
+  if (st.live_since) $("uptime").textContent = fmtTime(st.now_ms - st.live_since);
+  return st;
+}
+
 $("start").addEventListener("click", async () => {
   $("host-error").textContent = "";
   localStorage.setItem("vps", $("vps").value);
@@ -195,23 +225,17 @@ $("start").addEventListener("click", async () => {
       vpsKey: $("vps-key").value.trim() || null,
     });
     mode = "host";
-    const ip = s.vps_host || s.tailscale_ip || s.lan_ip || "TU_IP";
-    $("i-rtmp").textContent = s.rtmp_server;
-    $("i-skey").textContent = s.stream_key;
-    $("i-code").textContent = `${ip}:${s.ws_port}#${s.key}`;
-    $("i-net").textContent = s.vps_host
-      ? "Los espectadores se conectan a tu VPS; tu IP no se muestra."
-      : s.tailscale_ip
-      ? "Código con tu IP de Tailscale: los espectadores necesitan Tailscale y acceso a tu equipo (Share)."
-      : `Sin VPS ni Tailscale: el código solo sirve en tu red local.`;
-    $("host-info").classList.remove("hidden");
     $("clear").classList.remove("hidden");
+    $("health").classList.remove("hidden");
     show("live");
     connect(`ws://127.0.0.1:${s.ws_port}/?k=${s.key}&h=${s.host_token}`);
-    statusTimer = setInterval(async () => {
+    let prev = null;
+    const tick = async () => {
       const st = await invoke("stream_status").catch(() => null);
-      if (st) $("status").textContent = st.tunnel ? `${st.status} · ${st.tunnel}` : st.status;
-    }, 1000);
+      if (st) prev = renderHealth(st, prev);
+    };
+    tick();
+    statusTimer = setInterval(tick, 1000);
   } catch (e) {
     $("host-error").textContent = String(e);
   }
@@ -229,9 +253,9 @@ $("join").addEventListener("click", async () => {
   try {
     const port = await invoke("connect_viewer", { addr });
     mode = "viewer";
-    $("host-info").classList.add("hidden");
     $("clear").classList.add("hidden");
-    $("status").textContent = `Conectado a ${addr}`;
+    $("health").classList.add("hidden");
+    $("uptime").classList.add("hidden");
     show("live");
     const n = encodeURIComponent($("name").value.trim());
     connect(`ws://127.0.0.1:${port}/?k=${encodeURIComponent(key)}&n=${n}`);
@@ -242,10 +266,20 @@ $("join").addEventListener("click", async () => {
 
 // ---------- Navegación ----------
 
+let keys = null;
+
 function showKeys(k) {
+  keys = k;
   $("k-viewer").textContent = k.viewer_key;
   $("k-stream").textContent = k.stream_key;
+  $("k-rtmp").textContent = `rtmp://127.0.0.1:${Number($("rtmp-port").value)}/live`;
+  const vps = $("vps").value.trim();
+  const host = vps ? vps.split("@").pop() : "TU_IP";
+  $("k-code").textContent = `${host}:${Number($("ws-port").value)}#${k.viewer_key}`;
 }
+
+for (const id of ["vps", "ws-port", "rtmp-port"])
+  $(id).addEventListener("input", () => keys && showKeys(keys));
 
 async function regen(which, msg) {
   if (!confirm(msg)) return;

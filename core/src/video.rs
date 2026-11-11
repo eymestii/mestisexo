@@ -64,6 +64,7 @@ pub async fn run(shared: Arc<Shared>, ffmpeg: String, rtmp_url: String) {
         let was_live = {
             let mut st = shared.lock();
             st.last_frag = None;
+            st.live_since = None;
             st.init.take().is_some()
         };
         if was_live {
@@ -116,6 +117,7 @@ async fn pump<R: AsyncRead + Unpin>(shared: &Shared, r: &mut R) -> io::Result<()
                 let mut st = shared.lock();
                 st.init = Some((codec.clone(), init.clone()));
                 st.last_frag = None;
+                st.live_since = Some(crate::now_ms());
                 st.status = format!("En directo ({codec})");
                 shared.send_json(serde_json::json!({ "t": "live", "codec": codec }));
                 let _ = shared.tx.send(Out::Bin(init));
@@ -129,6 +131,9 @@ async fn pump<R: AsyncRead + Unpin>(shared: &Shared, r: &mut R) -> io::Result<()
                 frag.extend_from_slice(&data);
                 let f = Arc::new(std::mem::take(&mut frag));
                 let mut st = shared.lock();
+                st.bytes_total += f.len() as u64;
+                st.frags_total += 1;
+                st.last_data_ms = crate::now_ms();
                 st.last_frag = Some(f.clone());
                 let _ = shared.tx.send(Out::Bin(f));
             }

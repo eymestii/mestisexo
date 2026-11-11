@@ -67,6 +67,12 @@ pub(crate) struct State {
     pub viewers: usize,
     pub status: String,
     pub tunnel_status: Option<String>,
+    pub tunnel_up: Option<bool>,
+    /// Momento (ms) en que empezó la señal actual de OBS.
+    pub live_since: Option<u64>,
+    pub bytes_total: u64,
+    pub frags_total: u64,
+    pub last_data_ms: u64,
 }
 
 pub(crate) struct Shared {
@@ -118,6 +124,12 @@ pub struct Status {
     pub chat_messages: usize,
     pub status: String,
     pub tunnel: Option<String>,
+    pub tunnel_up: Option<bool>,
+    pub live_since: Option<u64>,
+    pub bytes_total: u64,
+    pub frags_total: u64,
+    pub last_data_ms: u64,
+    pub now_ms: u64,
 }
 
 /// Sesión de stream activa. Al soltarla (o llamar a `stop`) se cierra todo y
@@ -147,6 +159,12 @@ impl Handle {
             chat_messages: st.chat.len(),
             status: st.status.clone(),
             tunnel: st.tunnel_status.clone(),
+            tunnel_up: st.tunnel_up,
+            live_since: st.live_since,
+            bytes_total: st.bytes_total,
+            frags_total: st.frags_total,
+            last_data_ms: st.last_data_ms,
+            now_ms: now_ms(),
         }
     }
 

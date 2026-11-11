@@ -26,6 +26,8 @@
       <div><span>Clave de espectadores</span><code id="k-viewer"></code><button id="regen-viewer">Nueva</button></div>
       <div><span>Clave de stream (OBS)</span><code id="k-stream" class="secret"></code><button id="regen-stream">Nueva</button></div>
       <p class="muted">Son fijas entre sesiones. Si generas una nueva, la anterior deja de funcionar.</p>
+      <div><span>Servidor (OBS)</span><code id="k-rtmp"></code><button data-copy="k-rtmp">Copiar</button></div>
+      <div><span>Código para espectadores</span><code id="k-code"></code><button data-copy="k-code">Copiar</button></div>
     </div>
     <div class="row">
       <button class="back">Volver</button>
@@ -49,20 +51,19 @@
     <header>
       <button id="leave">Salir</button>
       <span id="badge" class="badge">OFFLINE</span>
+      <span id="uptime" class="hidden"></span>
       <span id="viewers">0 espectadores</span>
-      <span id="status" class="muted"></span>
+      <div id="health" class="health hidden">
+        <span id="h-obs" class="pill">OBS</span>
+        <span id="h-rate" class="pill">— kbps</span>
+        <span id="h-tunnel" class="pill hidden">Túnel</span>
+      </div>
     </header>
     <div class="main">
       <div class="left">
         <div class="player">
           <video id="video" autoplay playsinline controls></video>
           <div id="placeholder">Esperando señal…</div>
-        </div>
-        <div id="host-info" class="info hidden">
-          <div><span>Servidor (OBS)</span><code id="i-rtmp"></code><button data-copy="i-rtmp">Copiar</button></div>
-          <div><span>Clave de stream</span><code id="i-skey" class="secret"></code><button data-copy="i-skey">Copiar</button></div>
-          <div><span>Código para espectadores</span><code id="i-code"></code><button data-copy="i-code">Copiar</button></div>
-          <p id="i-net" class="muted"></p>
         </div>
       </div>
       <aside class="chat">

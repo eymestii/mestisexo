@@ -50,16 +50,16 @@ pub async fn run(shared: Arc<Shared>, t: Tunnel, local_port: u16) {
         }
 
         match cmd.spawn() {
-            Err(e) => set(&shared, format!("No se pudo ejecutar ssh: {e}")),
+            Err(e) => set(&shared, false, format!("No se pudo ejecutar ssh: {e}")),
             Ok(mut child) => {
-                set(&shared, format!("Conectando con {}…", t.target));
+                set(&shared, false, format!("Conectando con {}…", t.target));
                 let err = child.stderr.take();
                 let sh = shared.clone();
                 let target = t.target.clone();
                 // ssh no avisa al conectar; si sigue vivo tras unos segundos, el túnel está arriba.
                 let mark = tokio::spawn(async move {
                     tokio::time::sleep(Duration::from_secs(4)).await;
-                    set(&sh, format!("Público en {target}"));
+                    set(&sh, true, format!("Público en {target}"));
                 });
                 let mut last = String::new();
                 if let Some(err) = err {
@@ -72,13 +72,15 @@ pub async fn run(shared: Arc<Shared>, t: Tunnel, local_port: u16) {
                 }
                 let _ = child.wait().await;
                 mark.abort();
-                set(&shared, if last.is_empty() { "Túnel caído, reconectando…".into() } else { format!("Túnel caído ({last}), reconectando…") });
+                set(&shared, false, if last.is_empty() { "Túnel caído, reconectando…".into() } else { format!("Túnel caído ({last}), reconectando…") });
             }
         }
         tokio::time::sleep(Duration::from_secs(3)).await;
     }
 }
 
-fn set(shared: &Shared, s: String) {
-    shared.lock().tunnel_status = Some(s);
+fn set(shared: &Shared, up: bool, s: String) {
+    let mut st = shared.lock();
+    st.tunnel_up = Some(up);
+    st.tunnel_status = Some(s);
 }
