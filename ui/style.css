@@ -37,6 +37,9 @@ header { display: flex; align-items: center; gap: 14px; padding: 8px 12px; backg
 .info div { display: grid; grid-template-columns: 190px 1fr auto; gap: 10px; align-items: center; }
 .info code { background: var(--panel); padding: 6px 8px; border-radius: 4px; overflow-wrap: anywhere; user-select: all; }
 .secret:not(:hover) { filter: blur(4px); }
+.keys { display: flex; flex-direction: column; gap: 8px; }
+.keys div { display: grid; grid-template-columns: 170px 1fr auto; gap: 10px; align-items: center; }
+.keys code { background: var(--panel); padding: 6px 8px; border-radius: 4px; overflow-wrap: anywhere; }
 
 .chat { width: 340px; display: flex; flex-direction: column; background: var(--panel); border-left: 1px solid var(--line); }
 .chat-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--line); }

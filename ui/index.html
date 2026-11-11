@@ -22,6 +22,11 @@
     <label>Puerto RTMP (OBS) <input id="rtmp-port" type="number" min="1" max="65535" value="1935"></label>
     <label>VPS para espectadores (opcional) <input id="vps" placeholder="stream@109.123.252.126" autocomplete="off"></label>
     <label>Clave SSH del VPS <input id="vps-key" placeholder="~/.ssh/mestisexo_tunnel" autocomplete="off"></label>
+    <div class="keys">
+      <div><span>Clave de espectadores</span><code id="k-viewer"></code><button id="regen-viewer">Nueva</button></div>
+      <div><span>Clave de stream (OBS)</span><code id="k-stream" class="secret"></code><button id="regen-stream">Nueva</button></div>
+      <p class="muted">Son fijas entre sesiones. Si generas una nueva, la anterior deja de funcionar.</p>
+    </div>
     <div class="row">
       <button class="back">Volver</button>
       <button id="start" class="primary">Iniciar sesión</button>

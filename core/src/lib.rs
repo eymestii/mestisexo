@@ -35,6 +35,10 @@ pub struct Config {
     pub ffmpeg: String,
     /// Publicar a través de un VPS con un túnel SSH inverso.
     pub tunnel: Option<Tunnel>,
+    /// Clave fija para espectadores; si es `None` se genera una nueva.
+    pub viewer_key: Option<String>,
+    /// Clave de stream fija para OBS; si es `None` se genera una nueva.
+    pub stream_key: Option<String>,
 }
 
 #[derive(Clone)]
@@ -103,7 +107,7 @@ pub(crate) fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
-fn random_token(len: usize) -> String {
+pub fn random_token(len: usize) -> String {
     rand::thread_rng().sample_iter(&Alphanumeric).take(len).map(char::from).collect()
 }
 
@@ -183,7 +187,7 @@ pub async fn start(cfg: Config) -> io::Result<Handle> {
 
     let (tx, _) = broadcast::channel(64);
     let shared = Arc::new(Shared {
-        key: random_token(10),
+        key: cfg.viewer_key.clone().unwrap_or_else(|| random_token(10)),
         host_token: random_token(32),
         tx,
         state: Mutex::new(State { status: "Esperando a OBS…".into(), ..Default::default() }),
@@ -191,7 +195,7 @@ pub async fn start(cfg: Config) -> io::Result<Handle> {
 
     // RTMP solo en loopback: ffmpeg no valida la clave de stream, así que no
     // se expone a la red. OBS debe correr en el mismo equipo.
-    let stream_key = random_token(16);
+    let stream_key = cfg.stream_key.clone().unwrap_or_else(|| random_token(16));
     let rtmp_server = format!("rtmp://127.0.0.1:{}/live", cfg.rtmp_port);
     let rtmp_url = format!("{rtmp_server}/{stream_key}");
 

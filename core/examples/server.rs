@@ -10,6 +10,8 @@ async fn main() {
             identity: std::env::var("VPS_KEY").ok(),
             remote_port: 8090,
         }),
+        viewer_key: None,
+        stream_key: None,
     })
     .await
     .expect("start");

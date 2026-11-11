@@ -1778,6 +1778,7 @@ version = "0.1.0"
 dependencies = [
  "mestisexo-core",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tokio",

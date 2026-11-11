@@ -242,7 +242,27 @@ $("join").addEventListener("click", async () => {
 
 // ---------- Navegación ----------
 
-$("go-host").addEventListener("click", () => show("host-setup"));
+function showKeys(k) {
+  $("k-viewer").textContent = k.viewer_key;
+  $("k-stream").textContent = k.stream_key;
+}
+
+async function regen(which, msg) {
+  if (!confirm(msg)) return;
+  try { showKeys(await invoke("regenerate_keys", { which })); }
+  catch (e) { $("host-error").textContent = String(e); }
+}
+
+$("regen-viewer").addEventListener("click", () =>
+  regen("viewer", "¿Generar una clave de espectadores nueva? El código anterior dejará de funcionar."));
+$("regen-stream").addEventListener("click", () =>
+  regen("stream", "¿Generar una clave de stream nueva? Tendrás que pegarla otra vez en OBS."));
+
+$("go-host").addEventListener("click", async () => {
+  show("host-setup");
+  try { showKeys(await invoke("get_keys")); }
+  catch (e) { $("host-error").textContent = String(e); }
+});
 $("go-view").addEventListener("click", () => show("view-setup"));
 document.querySelectorAll(".back").forEach((b) => b.addEventListener("click", () => show("home")));
 $("leave").addEventListener("click", leave);
