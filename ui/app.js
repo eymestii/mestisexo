@@ -300,6 +300,14 @@ $("go-host").addEventListener("click", async () => {
 $("go-view").addEventListener("click", () => show("view-setup"));
 document.querySelectorAll(".back").forEach((b) => b.addEventListener("click", () => show("home")));
 $("leave").addEventListener("click", leave);
+
+function applyLayout(stacked) {
+  $("live").classList.toggle("stacked", stacked);
+  $("layout").textContent = stacked ? "Chat al lado" : "Chat abajo";
+  localStorage.setItem("stacked", stacked ? "1" : "0");
+}
+$("layout").addEventListener("click", () => applyLayout(!$("live").classList.contains("stacked")));
+applyLayout(localStorage.getItem("stacked") === "1");
 document.querySelectorAll("[data-copy]").forEach((b) =>
   b.addEventListener("click", () => navigator.clipboard.writeText($(b.dataset.copy).textContent)));
 $("name").value = localStorage.getItem("name") || "";
