@@ -1774,7 +1774,7 @@ dependencies = [
 
 [[package]]
 name = "mestisexo"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "mestisexo-core",
  "serde",
@@ -1786,7 +1786,7 @@ dependencies = [
 
 [[package]]
 name = "mestisexo-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "futures-util",
  "libc",
