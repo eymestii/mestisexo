@@ -46,7 +46,7 @@ pub(crate) async fn read_frame<R: AsyncRead + Unpin>(r: &mut R) -> io::Result<(u
 }
 
 pub struct RepeaterConfig {
-    /// Dirección pública para los espectadores, p. ej. `0.0.0.0:8090`.
+    /// Dirección pública para los espectadores, p. ej. `127.0.0.1:8090` (detrás de Caddy).
     pub listen: SocketAddr,
     /// Dirección local donde llega el streamer por SSH, p. ej. `127.0.0.1:8091`.
     pub upstream: SocketAddr,

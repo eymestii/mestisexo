@@ -1,11 +1,9 @@
 "use strict";
 
-// Sin Tauri (versión web y apps móviles) solo existe el modo espectador y se
-// conecta directo al repetidor del VPS en /ws.
-// Las apps móviles cargan la web del VPS: ahí también puede existir __TAURI__,
-// así que se mira el origen de la página.
-const native = !!window.__TAURI__ && (location.protocol === "tauri:" || location.hostname === "tauri.localhost");
-const invoke = native ? window.__TAURI__.core.invoke : () => Promise.reject(new Error("No disponible en la versión web"));
+// La misma interfaz sirve para la app del streamer (Tauri) y para la web de
+// los espectadores, que se conecta al repetidor del VPS en /ws.
+const native = !!window.__TAURI__;
+const invoke = native ? window.__TAURI__.core.invoke : () => Promise.reject(new Error("No disponible en la web"));
 const $ = (id) => document.getElementById(id);
 const MAX_LINES = 200;
 // Segundos por detrás del directo: objetivo, y a partir de cuánto se salta.
@@ -19,7 +17,7 @@ let reconnectTimer = null;
 let wsUrl = null;
 
 function show(id) {
-  for (const s of ["home", "host-setup", "view-setup", "live"]) $(s).classList.toggle("hidden", s !== id);
+  for (const s of ["host-setup", "view-setup", "live"]) $(s).classList.toggle("hidden", s !== id);
 }
 
 // ---------- Reproductor (MediaSource con MP4 fragmentado) ----------
@@ -251,9 +249,8 @@ async function leave() {
   player.destroy();
   $("messages").replaceChildren();
   if (mode === "host") await invoke("stop_stream").catch(() => {});
-  if (mode === "viewer") await invoke("disconnect_viewer").catch(() => {});
   mode = null;
-  show(native ? "home" : "view-setup");
+  show(native ? "host-setup" : "view-setup");
 }
 
 // ---------- Streamer ----------
@@ -327,19 +324,12 @@ async function join() {
   const code = $("code").value.trim();
   localStorage.setItem("name", $("name").value);
   const n = encodeURIComponent($("name").value.trim());
+  // Vale la clave sola o el enlace completo.
+  const key = code.split("#").pop();
+  if (!/^[A-Za-z0-9]{1,64}$/.test(key)) { $("view-error").textContent = "Pega el enlace o la clave del stream."; return; }
+  localStorage.setItem("web-key", key);
+  viewerBase = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws?k=${key}&n=${n}`;
   try {
-    if (native) {
-      const [addr, key] = code.split("#");
-      if (!addr || !key) { $("view-error").textContent = "El código debe tener el formato ip:puerto#clave"; return; }
-      const port = await invoke("connect_viewer", { addr });
-      viewerBase = `ws://127.0.0.1:${port}/?k=${encodeURIComponent(key)}&n=${n}`;
-    } else {
-      // Vale la clave sola, el código ip:puerto#clave o el enlace web.
-      const key = code.split("#").pop();
-      if (!/^[A-Za-z0-9]{1,64}$/.test(key)) { $("view-error").textContent = "Pega el enlace o la clave del stream."; return; }
-      localStorage.setItem("web-key", key);
-      viewerBase = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws?k=${key}&n=${n}`;
-    }
     mode = "viewer";
     $("clear").classList.add("hidden");
     $("health").classList.add("hidden");
@@ -412,8 +402,6 @@ function authNeeded(e) {
   $("login-invite").dataset.url = e.invite || "";
 }
 
-// Cada clic empieza un inicio de sesión nuevo; el resultado de uno anterior se ignora.
-let loginSeq = 0;
 
 function randomState() {
   const abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -440,39 +428,11 @@ async function finishWebLogin() {
   catch (e) { $("view-error").textContent = String(e.message || e); }
 }
 
-$("login-discord").addEventListener("click", async () => {
-  if (!native) {
-    const state = randomState();
-    localStorage.setItem("login-state", state);
-    location.href = `${authUrl}/login?web=1&state=${state}`;
-    return;
-  }
-  const seq = ++loginSeq;
-  $("login-link").classList.add("hidden");
-  $("login-msg").textContent = "Abriendo el navegador…";
-  try {
-    const start = await invoke("discord_login_start", { authUrl });
-    if (seq !== loginSeq) return;
-    $("login-url").textContent = start.url;
-    $("login-link").classList.remove("hidden");
-    $("login-msg").textContent = start.error
-      ? `${start.error}. Copia el enlace y ábrelo en tu navegador.`
-      : "Termina el inicio de sesión en el navegador. Si no se abrió, copia el enlace.";
-    const code = await invoke("discord_login_wait");
-    if (seq !== loginSeq) return;
-    await exchangeCode(code);
-    $("login-panel").classList.add("hidden");
-    $("login-link").classList.add("hidden");
-    connect(viewerUrl);
-  } catch (e) {
-    if (seq === loginSeq) $("login-msg").textContent = String(e.message || e);
-  }
-});
-
-$("login-copy").addEventListener("click", () => {
-  navigator.clipboard.writeText($("login-url").textContent).then(
-    () => { $("login-copy").textContent = "Copiado"; setTimeout(() => ($("login-copy").textContent = "Copiar enlace"), 1500); },
-    () => {});
+// Discord vuelve a esta misma página con ?code=…&state=….
+$("login-discord").addEventListener("click", () => {
+  const state = randomState();
+  localStorage.setItem("login-state", state);
+  location.href = `${authUrl}/login?state=${state}`;
 });
 
 $("login-invite").addEventListener("click", () => {
@@ -480,10 +440,8 @@ $("login-invite").addEventListener("click", () => {
   if (url) openUrl(url).catch(() => {});
 });
 
-// En la web se abre en otra pestaña; si el navegador no deja (apps móviles),
-// en esta misma.
+// En otra pestaña; si el navegador no deja, en esta misma.
 async function openUrl(url) {
-  if (native) return invoke("open_url", { url });
   const w = window.open(url, "_blank");
   if (w) w.opener = null;
   else location.href = url;
@@ -541,13 +499,10 @@ function showKeys(k) {
   $("k-viewer").textContent = k.viewer_key;
   $("k-stream").textContent = k.stream_key;
   $("k-rtmp").textContent = `rtmp://127.0.0.1:${Number($("rtmp-port").value)}/live`;
-  const vps = $("vps").value.trim();
-  const host = vps ? vps.split("@").pop() : "TU_IP";
-  $("k-code").textContent = `${host}:${Number($("ws-port").value)}#${k.viewer_key}`;
-  // La versión web vive en el VPS, con el certificado de <ip-con-guiones>.sslip.io.
-  const web = /^\d+\.\d+\.\d+\.\d+$/.test(host) ? `${host.replace(/\./g, "-")}.sslip.io` : vps ? host : null;
-  $("k-web-row").classList.toggle("hidden", !web);
-  $("k-web").textContent = web ? `https://${web}/#${k.viewer_key}` : "";
+  // La web vive en el VPS, con el certificado de <ip-con-guiones>.sslip.io.
+  const host = $("vps").value.trim().split("@").pop();
+  const web = /^\d+\.\d+\.\d+\.\d+$/.test(host) ? `${host.replace(/\./g, "-")}.sslip.io` : host;
+  $("k-web").textContent = web ? `https://${web}/#${k.viewer_key}` : "Indica el VPS";
 }
 
 for (const id of ["vps", "ws-port", "rtmp-port"])
@@ -564,13 +519,6 @@ $("regen-viewer").addEventListener("click", () =>
 $("regen-stream").addEventListener("click", () =>
   regen("stream", "¿Generar una clave de stream nueva? Tendrás que pegarla otra vez en OBS."));
 
-$("go-host").addEventListener("click", async () => {
-  show("host-setup");
-  try { showKeys(await invoke("get_keys")); }
-  catch (e) { $("host-error").textContent = String(e); }
-});
-$("go-view").addEventListener("click", () => show("view-setup"));
-document.querySelectorAll(".back").forEach((b) => b.addEventListener("click", () => show("home")));
 $("leave").addEventListener("click", leave);
 
 function applyLayout(stacked) {
@@ -586,11 +534,11 @@ $("name").value = localStorage.getItem("name") || "";
 $("vps").value = localStorage.getItem("vps") ?? "stream@109.123.252.126";
 $("vps-key").value = localStorage.getItem("vps-key") ?? "~/.ssh/mestisexo_tunnel";
 
-if (!native) {
+if (native) {
+  show("host-setup");
+  invoke("get_keys").then(showKeys, (e) => { $("host-error").textContent = String(e); });
+} else {
   document.body.classList.add("web");
-  $("go-host").classList.add("hidden");
-  document.querySelectorAll("#view-setup .back").forEach((b) => b.classList.add("hidden"));
-  $("code").placeholder = "Enlace o clave del stream";
   $("code").value = location.hash.slice(1) || localStorage.getItem("web-key") || "";
   show("view-setup");
   finishWebLogin().then(() => { if ($("code").value) join(); });

@@ -1,64 +1,43 @@
 # Mestisexo
 
-App para hacer streaming sin depender de servidores externos (Tauri 2 + Rust, con HTML/JS sin frameworks en la interfaz).
+Streaming en tiempo real con chat, en tres piezas:
 
-| Plataforma | Descarga | Modos |
-|---|---|---|
-| Windows | `.exe` | Transmitir y ver |
-| Linux | `.AppImage` (cualquier distro), `.deb` (Debian/Ubuntu), `.rpm` (Fedora/openSUSE) | Transmitir y ver |
-| macOS 11+ (Intel y Apple Silicon) | `.dmg` | Transmitir y ver |
-| Android 7+ | `.apk` | Ver |
-| iPhone/iPad (iOS 17.1+) y cualquier navegador | `https://109-123-252-126.sslip.io` | Ver |
+- **Módulo del streamer** (Tauri 2 + Rust, solo Arch Linux): recibe la señal de OBS por RTMP y envía una sola copia al VPS por SSH.
+- **VPS**: el repetidor (`mestisexo-repeater`) reparte esa copia a todos los espectadores, el servicio de cuentas (`mestisexo-auth`) gestiona Discord y los pagos, y Caddy sirve todo por HTTPS.
+- **Web para espectadores**: `https://109-123-252-126.sslip.io/#CLAVE`. Funciona en cualquier navegador, también en móviles (iPhone con iOS 17.1 o posterior), sin descargar nada.
 
-La app de macOS no está firmada por Apple. La primera vez, haz clic derecho sobre la app → **Abrir** → **Abrir**. Si dice que «está dañada», ejecuta `xattr -cr /Applications/Mestisexo.app`.
+El chat se guarda solo en memoria (máximo 200 mensajes), se borra al terminar la sesión y nunca se escribe en disco.
 
-En iPhone, abre el enlace en Safari y pulsa **Compartir → Añadir a pantalla de inicio**: queda como una app más, sin descargar nada. La app de Android carga esa misma web, así que los cambios en la interfaz le llegan sin actualizar.
-
-- **Transmitir**: OBS envía la señal por RTMP a la app, que la reparte por WebSocket sin recodificar, directamente o a través de un repetidor en un VPS.
-- **Ver**: otra persona con la app abre el código del stream y ve el vídeo y el chat.
-- **Chat**: se guarda solo en memoria (máximo 200 mensajes). Se borra al terminar la sesión y nunca se escribe en disco.
-
-## Requisitos
-
-- `ffmpeg` en el PATH, o un `ffmpeg` (`ffmpeg.exe` en Windows) junto al ejecutable. Solo lo necesita el streamer.
-- Linux: `webkit2gtk-4.1`, `gst-plugins-base`, `gst-plugins-good`, `gst-libav`.
-
-## Compilar
+## Módulo del streamer (Arch Linux)
 
 ```sh
-cargo build --release -p mestisexo      # binario: target/release/mestisexo
-cargo install tauri-cli && cd app && cargo tauri build   # instaladores de escritorio
-cd app && cargo tauri android build --apk                # Android (ANDROID_HOME y NDK_HOME)
+cd packaging/arch && makepkg -si
 ```
 
-## Uso
+Depende de `webkit2gtk-4.1`, `gst-plugins-base`, `gst-plugins-good`, `gst-libav`, `ffmpeg` y `openssh`. Para probar sin instalar: `cargo build --release -p mestisexo`.
 
-1. **Transmitir → Iniciar sesión.** La app muestra el servidor RTMP, la clave de stream y el código para espectadores.
-2. En OBS: *Ajustes → Emisión → Servicio: Personalizado*. Pega el servidor y la clave.
+1. Abre Mestisexo, rellena «VPS» (`stream@109.123.252.126`) y «Clave SSH» (`~/.ssh/mestisexo_tunnel`), y pulsa **Iniciar sesión**.
+2. En OBS: *Ajustes → Emisión → Servicio: Personalizado*. Pega el servidor y la clave de stream.
    En *Salida* usa **x264/NVENC H.264, AAC, perfil main o high, intervalo de fotogramas clave 1 s**.
-3. Comparte el código (`ip:puerto#clave`). Los espectadores eligen **Ver un stream** y lo pegan.
+3. Comparte el «Enlace para espectadores».
 
-### Espectadores en otras redes (VPS)
+## VPS
 
-Tu PC envía **una sola copia** de la señal al VPS por SSH, y el repetidor del VPS (`mestisexo-repeater`) la reparte a todos los espectadores. Tu subida solo necesita el bitrate de OBS, haya los espectadores que haya. El límite pasa a ser la subida del VPS (bitrate × espectadores). Tu IP no queda expuesta.
+Tu PC envía **una sola copia** de la señal al VPS por SSH, y el repetidor la reparte a todos los espectadores. Tu subida solo necesita el bitrate de OBS, haya los espectadores que haya. Tu IP no queda expuesta.
 
-En **Transmitir**, rellena «VPS para espectadores» (`stream@IP_DEL_VPS`) y «Clave SSH» (`~/.ssh/mestisexo_tunnel`).
-
-Instalación en el VPS (como root):
+Cada release incluye `mestisexo-vps-x86_64-linux.tar.gz` con los binarios estáticos, la carpeta `web/` y los ficheros de `deploy/`. En el VPS (como root):
 
 ```sh
-# En tu PC: compilar el repetidor (binario estático, sin dependencias)
-rustup target add x86_64-unknown-linux-musl
-cargo build --release -p mestisexo-core --bin mestisexo-repeater --target x86_64-unknown-linux-musl
-scp target/x86_64-unknown-linux-musl/release/mestisexo-repeater deploy/* root@IP_DEL_VPS:/tmp/
-
-# En el VPS
-install -m 755 /tmp/mestisexo-repeater /usr/local/bin/
-install -m 644 /tmp/mestisexo-repeater.service /etc/systemd/system/
-install -m 644 /tmp/50-mestisexo-stream.conf /etc/ssh/sshd_config.d/
-systemctl daemon-reload && systemctl enable --now mestisexo-repeater
-sshd -t && systemctl reload ssh
-ufw allow 8090/tcp
+mkdir -p /tmp/mestisexo && tar -xzf mestisexo-vps-x86_64-linux.tar.gz -C /tmp/mestisexo && cd /tmp/mestisexo
+install -m 755 mestisexo-repeater mestisexo-auth /usr/local/bin/
+install -m 644 mestisexo-repeater.service mestisexo-auth.service /etc/systemd/system/
+install -D -m 644 10-discord.conf /etc/systemd/system/mestisexo-repeater.service.d/10-discord.conf
+install -m 644 50-mestisexo-stream.conf /etc/ssh/sshd_config.d/
+install -m 644 Caddyfile /etc/caddy/Caddyfile
+rm -rf /srv/mestisexo/web && mkdir -p /srv/mestisexo && cp -r web /srv/mestisexo/web
+systemctl daemon-reload && systemctl enable --now mestisexo-auth mestisexo-repeater
+sshd -t && systemctl reload ssh && systemctl reload caddy
+ufw allow 80/tcp && ufw allow 443/tcp
 ```
 
 En `~stream/.ssh/authorized_keys`, la línea de la clave debe permitir solo la conexión al repetidor:
@@ -67,9 +46,7 @@ En `~stream/.ssh/authorized_keys`, la línea de la clave debe permitir solo la c
 restrict,port-forwarding,permitopen="127.0.0.1:8091" ssh-ed25519 AAAA… mestisexo
 ```
 
-El repetidor escucha a los espectadores en `0.0.0.0:8090` y al streamer en `127.0.0.1:8091`, que solo es accesible por SSH.
-
-También puedes usar Tailscale o ZeroTier sin VPS. En ese caso tu PC envía una copia por espectador. Si Tailscale está conectado y no configuras un VPS, el código del stream usa tu IP de Tailscale.
+Todo escucha solo en `127.0.0.1`: el repetidor en `8090` (espectadores, a través de Caddy en `/ws`) y `8091` (streamer, solo accesible por SSH), y el servicio de cuentas en `8092` (público, a través de Caddy) y `8093` (interno). Desde fuera solo están abiertos el 80 y el 443.
 
 ### Cuentas de Discord y suscripciones (VPS)
 
@@ -77,9 +54,8 @@ Con el servicio `mestisexo-auth`, solo pueden ver el stream los miembros de tu s
 
 - Caddy sirve `https://109-123-252-126.sslip.io` con un certificado de Let's Encrypt y lo reenvía a `127.0.0.1:8092`.
 - Los secretos solo están en el VPS, en `/etc/mestisexo/auth.env` (root, 600). La plantilla está en `deploy/auth.env.example`. Si una parte no tiene claves, queda desactivada.
-- La app inicia sesión en el navegador del sistema y recibe un código en un puerto local. Para cada conexión al stream pide un ticket de un solo uso, que el repetidor canjea por la red interna (`127.0.0.1:8093`).
-- La versión web vive en `/srv/mestisexo/web` (es la carpeta `ui/`, también incluida como `web/` en el tarball de la release). Caddy la sirve y reenvía `/ws` al repetidor. Así el vídeo va cifrado (wss) y funciona en navegadores y móviles. En la web, Discord devuelve el código a la propia página, que solo lo acepta si coincide el `state` que guardó.
-- Para exigir la cuenta en el repetidor: `install -D -m 644 deploy/10-discord.conf /etc/systemd/system/mestisexo-repeater.service.d/10-discord.conf && systemctl daemon-reload && systemctl restart mestisexo-repeater`.
+- La web inicia sesión con Discord, que devuelve un código a la propia página. La página solo lo acepta si coincide con el `state` que guardó antes de salir. Para cada conexión al stream pide un ticket de un solo uso, que el repetidor canjea por la red interna (`127.0.0.1:8093`).
+- La web vive en `/srv/mestisexo/web` (es la carpeta `ui/`). Caddy la sirve y reenvía `/ws` al repetidor, así que el vídeo va cifrado (wss).
 
 ### Tiempo real
 
@@ -92,8 +68,8 @@ Con el servicio `mestisexo-auth`, solo pueden ver el stream los miembros de tu s
 ## Seguridad
 
 - El RTMP solo escucha en `127.0.0.1`, así que OBS tiene que correr en el mismo equipo.
-- Sin la clave del código no se puede conectar. Las claves son nuevas en cada sesión.
-- El tráfico no va cifrado. Para cifrarlo, usa la VPN.
+- Sin la clave del enlace no se puede conectar. Las claves son fijas entre sesiones y se pueden cambiar con «Nueva».
+- Todo va cifrado: los espectadores por HTTPS/wss y el streamer por SSH.
 - Límites del chat: 300 caracteres por mensaje y un mensaje cada 0,7 s por persona. El repetidor admite 500 espectadores como máximo (`--max-viewers`).
 
 ### Capacidad del VPS

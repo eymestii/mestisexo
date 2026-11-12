@@ -90,8 +90,8 @@ struct Session {
 
 #[derive(Default)]
 struct Mem {
-    /// `state` de OAuth → (puerto local de la app o 0 si es la web, `state` de la app, caducidad).
-    logins: HashMap<String, (u16, String, u64)>,
+    /// `state` de OAuth → (`state` de la página, caducidad).
+    logins: HashMap<String, (String, u64)>,
     /// Código de un solo uso → (token de sesión, caducidad).
     codes: HashMap<String, (String, u64)>,
     /// Ticket de un solo uso para entrar al stream → (usuario, caducidad).
@@ -269,17 +269,11 @@ fn api(status: StatusCode, v: Value) -> Response {
 
 // ---------- Inicio de sesión con Discord ----------
 
-/// La app escucha en `127.0.0.1:port` y recibe ahí el resultado (RFC 8252).
-/// Así, aunque alguien envíe a otro un enlace de inicio de sesión preparado,
-/// el código acaba en el PC de quien inicia sesión y no en el de quien lo envió.
-/// Con `web=1` (versión web) el resultado vuelve a la página principal, que
-/// solo lo acepta si el `state` coincide con el que guardó esa pestaña.
+/// El resultado vuelve a la página principal, que solo lo acepta si el
+/// `state` coincide con el que guardó ese navegador antes de salir. Así, un
+/// enlace de inicio de sesión preparado por otro no sirve.
 #[derive(Deserialize)]
 struct LoginQuery {
-    #[serde(default)]
-    port: u16,
-    /// `web=1`.
-    web: Option<String>,
     state: String,
 }
 
@@ -287,9 +281,8 @@ async fn login(State(app): State<Shared>, Query(q): Query<LoginQuery>) -> Respon
     let Some(d) = &app.cfg.discord else {
         return page("No disponible", "<p>El inicio de sesión con Discord aún no está configurado.</p>").into_response();
     };
-    let web = q.web.as_deref() == Some("1");
-    if !valid_token(&q.state) || (q.port < 1024 && !web) {
-        return (StatusCode::BAD_REQUEST, page("Enlace inválido", "<p>Vuelve a la app e inténtalo de nuevo.</p>")).into_response();
+    if !valid_token(&q.state) {
+        return (StatusCode::BAD_REQUEST, page("Enlace inválido", "<p><a href=\"/\">Vuelve al directo</a> e inténtalo de nuevo.</p>")).into_response();
     }
     let state = token(32);
     {
@@ -297,7 +290,7 @@ async fn login(State(app): State<Shared>, Query(q): Query<LoginQuery>) -> Respon
         if mem.logins.len() >= MAX_PENDING {
             return (StatusCode::SERVICE_UNAVAILABLE, page("Ocupado", "<p>Inténtalo dentro de unos minutos.</p>")).into_response();
         }
-        mem.logins.insert(state.clone(), (if web { 0 } else { q.port }, q.state, now() + LOGIN_TTL));
+        mem.logins.insert(state.clone(), (q.state, now() + LOGIN_TTL));
     }
     let url = reqwest::Url::parse_with_params(
         "https://discord.com/oauth2/authorize",
@@ -323,9 +316,9 @@ struct Callback {
 
 async fn callback(State(app): State<Shared>, Query(q): Query<Callback>) -> Response {
     let Some(d) = &app.cfg.discord else { return StatusCode::NOT_FOUND.into_response() };
-    let pending = q.state.as_deref().and_then(|s| app.mem().logins.remove(s)).filter(|(_, _, exp)| *exp > now());
-    let Some((port, app_state, _)) = pending else {
-        return page("Enlace caducado", "<p>Vuelve a la app y pulsa otra vez «Iniciar sesión con Discord».</p>").into_response();
+    let pending = q.state.as_deref().and_then(|s| app.mem().logins.remove(s)).filter(|(_, exp)| *exp > now());
+    let Some((app_state, _)) = pending else {
+        return page("Enlace caducado", "<p><a href=\"/\">Vuelve al directo</a> y pulsa otra vez «Iniciar sesión con Discord».</p>").into_response();
     };
     let Some(code) = q.code else {
         return page("Inicio de sesión cancelado", "<p>Puedes cerrar esta pestaña.</p>").into_response();
@@ -345,7 +338,7 @@ async fn callback(State(app): State<Shared>, Query(q): Query<Callback>) -> Respo
             let link = d.invite.clone()
                 .map(|i| format!("<p><a href=\"{0}\">{0}</a></p>", esc(&i)))
                 .unwrap_or_default();
-            return page("No estás en el servidor", &format!("<p>Para ver los directos tienes que unirte al servidor de Discord.</p>{link}<p>Después vuelve a la app e inicia sesión otra vez.</p>")).into_response();
+            return page("No estás en el servidor", &format!("<p>Para ver los directos tienes que unirte al servidor de Discord.</p>{link}<p>Después <a href=\"/\">vuelve al directo</a> e inicia sesión otra vez.</p>")).into_response();
         }
         Err(()) => {
             return page("Error", "<p>No se pudo comprobar tu cuenta en el servidor. Vuelve a intentarlo.</p>").into_response();
@@ -363,10 +356,7 @@ async fn callback(State(app): State<Shared>, Query(q): Query<Callback>) -> Respo
     }
     let one_time = token(32);
     app.mem().codes.insert(one_time.clone(), (session, now() + TICKET_TTL * 5));
-    if port == 0 {
-        return Redirect::to(&format!("{}/?code={one_time}&state={app_state}", app.cfg.public_url)).into_response();
-    }
-    Redirect::to(&format!("http://127.0.0.1:{port}/done?code={one_time}&state={app_state}")).into_response()
+    Redirect::to(&format!("{}/?code={one_time}&state={app_state}", app.cfg.public_url)).into_response()
 }
 
 async fn discord_user(app: &App, d: &Discord, code: &str) -> Result<String, String> {
@@ -402,7 +392,7 @@ async fn discord_user(app: &App, d: &Discord, code: &str) -> Result<String, Stri
     Ok(id.to_string())
 }
 
-// ---------- API para la app ----------
+// ---------- API para la web ----------
 
 #[derive(Deserialize)]
 struct Exchange {
@@ -498,11 +488,11 @@ async fn checkout(State(app): State<Shared>, headers: HeaderMap) -> Response {
 }
 
 async fn paid() -> Html<String> {
-    page("Gracias", "<p>Si el pago se completó, tu insignia de suscriptor aparecerá en la app en unos segundos. Ya puedes cerrar esta pestaña.</p><p><a href=\"/\">Volver al directo</a></p>")
+    page("Gracias", "<p>Si el pago se completó, tu insignia de suscriptor aparecerá en el chat en unos segundos. Ya puedes cerrar esta pestaña.</p><p><a href=\"/\">Volver al directo</a></p>")
 }
 
-/// La app hace las peticiones desde su webview (otro origen). No se usan
-/// cookies, solo el token en `Authorization`, así que se permite cualquier origen.
+/// No se usan cookies, solo el token en `Authorization`, así que se permite
+/// cualquier origen.
 async fn cors(req: axum::extract::Request, next: middleware::Next) -> Response {
     let mut res = if req.method() == Method::OPTIONS {
         StatusCode::NO_CONTENT.into_response()
@@ -628,7 +618,7 @@ fn prune(app: &App) {
     let t = now();
     {
         let mut mem = app.mem();
-        mem.logins.retain(|_, (_, _, e)| *e > t);
+        mem.logins.retain(|_, (_, e)| *e > t);
         mem.codes.retain(|_, (_, e)| *e > t);
         mem.tickets.retain(|_, (_, e)| *e > t);
         mem.seen_hooks.retain(|_, e| *e > t);

@@ -21,7 +21,6 @@ use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::io;
-use std::net::{IpAddr, UdpSocket};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
@@ -383,7 +382,8 @@ impl Drop for Handle {
 
 /// Arranca una sesión. Debe llamarse dentro de un runtime de Tokio.
 pub async fn start(cfg: Config) -> io::Result<Handle> {
-    let listener = TcpListener::bind(("0.0.0.0", cfg.ws_port)).await.map_err(|e| {
+    // Solo para la propia app: los espectadores entran por el repetidor del VPS.
+    let listener = TcpListener::bind(("127.0.0.1", cfg.ws_port)).await.map_err(|e| {
         io::Error::new(e.kind(), format!("No se pudo abrir el puerto {}: {e}", cfg.ws_port))
     })?;
     let ws_port = listener.local_addr()?.port();
@@ -406,56 +406,4 @@ pub async fn start(cfg: Config) -> io::Result<Handle> {
     }
 
     Ok(Handle { shared, tasks, ws_port, rtmp_server, stream_key })
-}
-
-/// Relé TCP local para el modo espectador: el webview solo puede abrir
-/// `ws://` hacia loopback (contenido mixto), así que conecta a
-/// `127.0.0.1:<puerto devuelto>` y el relé reenvía a `remote` ("host:puerto").
-pub async fn relay(remote: String) -> io::Result<(u16, JoinHandle<()>)> {
-    // Comprobar que el destino responde antes de dar el puerto al webview.
-    let probe = tokio::time::timeout(
-        Duration::from_secs(5),
-        tokio::net::TcpStream::connect(remote.as_str()),
-    )
-    .await
-    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "El streamer no responde"))??;
-    drop(probe);
-
-    let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
-    let port = listener.local_addr()?.port();
-    let task = tokio::spawn(async move {
-        while let Ok((mut local, _)) = listener.accept().await {
-            let remote = remote.clone();
-            tokio::spawn(async move {
-                if let Ok(mut up) = tokio::net::TcpStream::connect(remote.as_str()).await {
-                    let _ = up.set_nodelay(true);
-                    let _ = local.set_nodelay(true);
-                    let _ = tokio::io::copy_bidirectional(&mut local, &mut up).await;
-                }
-            });
-        }
-    });
-    Ok((port, task))
-}
-
-/// IPv4 de Tailscale (rango 100.64.0.0/10) si está instalado y conectado.
-pub fn tailscale_ip() -> Option<IpAddr> {
-    let mut cmd = std::process::Command::new("tailscale");
-    cmd.args(["ip", "-4"]);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000);
-    }
-    let out = cmd.output().ok().filter(|o| o.status.success())?;
-    let ip: std::net::Ipv4Addr = String::from_utf8_lossy(&out.stdout).lines().next()?.trim().parse().ok()?;
-    let o = ip.octets();
-    (o[0] == 100 && (o[1] & 0xC0) == 64).then_some(IpAddr::V4(ip))
-}
-
-/// IP de la interfaz de red con salida por defecto (no envía tráfico).
-pub fn local_ip() -> Option<IpAddr> {
-    let s = UdpSocket::bind("0.0.0.0:0").ok()?;
-    s.connect("8.8.8.8:80").ok()?;
-    s.local_addr().ok().map(|a| a.ip())
 }

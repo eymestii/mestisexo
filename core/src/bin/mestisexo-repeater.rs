@@ -1,10 +1,10 @@
-//! Repetidor para el VPS: `mestisexo-repeater [--listen 0.0.0.0:8090] [--upstream 127.0.0.1:8091] [--max-viewers 500]
+//! Repetidor para el VPS: `mestisexo-repeater [--listen 127.0.0.1:8090] [--upstream 127.0.0.1:8091] [--max-viewers 500]
 //! [--auth-internal 127.0.0.1:8093 --auth-url https://…]`
 use std::net::SocketAddr;
 
 fn main() {
     let mut cfg = mestisexo_core::RepeaterConfig {
-        listen: "0.0.0.0:8090".parse().unwrap(),
+        listen: "127.0.0.1:8090".parse().unwrap(),
         upstream: SocketAddr::from(([127, 0, 0, 1], mestisexo_core::REPEATER_UPSTREAM_PORT)),
         max_viewers: 500,
         auth: None,

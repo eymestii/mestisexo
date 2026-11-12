@@ -18,10 +18,6 @@ input { background: #0e0e10; border: 1px solid var(--line); border-radius: 6px; 
 .screen { max-width: 520px; margin: 10vh auto; padding: 0 20px; display: flex; flex-direction: column; gap: 14px; }
 .screen label { display: flex; flex-direction: column; gap: 6px; color: var(--muted); }
 .row { display: flex; gap: 10px; justify-content: flex-end; }
-.cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.card { display: flex; flex-direction: column; gap: 6px; text-align: left; padding: 18px; background: var(--panel); border: 1px solid var(--line); }
-.card b { font-size: 16px; }
-.card span { color: var(--muted); }
 
 #live { display: flex; flex-direction: column; height: 100vh; }
 header { display: flex; align-items: center; gap: 14px; height: var(--head); flex: 0 0 auto; padding: 0 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
@@ -76,8 +72,6 @@ header #layout { margin-right: auto; }
 .account { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
 .account b { margin-right: auto; }
 .account button { padding: 4px 10px; font-size: 12px; }
-.login-link { display: flex; gap: 8px; align-items: center; max-width: 100%; }
-.login-link code { background: var(--panel); padding: 6px 8px; border-radius: 4px; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 420px; user-select: all; }
 
 /* Móviles: márgenes de la muesca, cabecera que no desborda y textos legibles. */
 body.web #live { height: 100dvh; padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); }
@@ -86,7 +80,5 @@ body.web #chat-form { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
   header { gap: 8px; overflow-x: auto; }
   header #viewers { white-space: nowrap; }
   .screen { margin: 6vh auto; }
-  .cards { grid-template-columns: 1fr; }
   input { font-size: 16px; }
-  .login-link code { max-width: 60vw; }
 }

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Mestisexo
+Comment=Transmitir con OBS a la web de Mestisexo
+Exec=mestisexo
+Icon=mestisexo
+Terminal=false
+Categories=AudioVideo;

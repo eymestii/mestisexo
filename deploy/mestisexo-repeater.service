@@ -4,7 +4,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/mestisexo-repeater --listen 0.0.0.0:8090 --upstream 127.0.0.1:8091 --max-viewers 500
+ExecStart=/usr/local/bin/mestisexo-repeater --listen 127.0.0.1:8090 --upstream 127.0.0.1:8091 --max-viewers 500
 Restart=always
 RestartSec=2
 DynamicUser=yes
