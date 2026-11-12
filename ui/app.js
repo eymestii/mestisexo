@@ -119,6 +119,7 @@ function setLive(live, codec) {
   $("badge").textContent = live ? "EN VIVO" : "OFFLINE";
   $("badge").classList.toggle("on", live);
   setPlaceholder(live ? "" : "Esperando señal…");
+  if (mode === "host") return;
   if (live && codec) player.reset(codec);
   if (!live) player.destroy();
 }
@@ -250,6 +251,7 @@ async function leave() {
   $("messages").replaceChildren();
   if (mode === "host") await invoke("stop_stream").catch(() => {});
   mode = null;
+  $("live").classList.remove("host");
   show(native ? "host-setup" : "view-setup");
 }
 
@@ -297,6 +299,7 @@ $("start").addEventListener("click", async () => {
       vpsKey: $("vps-key").value.trim() || null,
     });
     mode = "host";
+    $("live").classList.add("host");
     $("clear").classList.remove("hidden");
     $("health").classList.remove("hidden");
     show("live");

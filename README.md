@@ -21,6 +21,8 @@ Depende de `webkit2gtk-4.1`, `gst-plugins-base`, `gst-plugins-good`, `gst-libav`
    En *Salida* usa **x264/NVENC H.264, AAC, perfil main o high, intervalo de fotogramas clave 1 s**.
 3. Comparte el «Enlace para espectadores».
 
+Durante el directo, tu ventana muestra solo el chat y el estado (OBS, kbps, VPS). El vídeo no se te envía, así que tu PC no gasta en decodificarlo. Para ver cómo queda, abre el enlace en un navegador.
+
 ## VPS
 
 Tu PC envía **una sola copia** de la señal al VPS por SSH, y el repetidor la reparte a todos los espectadores. Tu subida solo necesita el bitrate de OBS, haya los espectadores que haya. Tu IP no queda expuesta.

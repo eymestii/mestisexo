@@ -82,3 +82,9 @@ body.web #chat-form { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
   .screen { margin: 6vh auto; }
   input { font-size: 16px; }
 }
+
+/* Streamer: solo el chat, a todo el ancho. El vídeo se ve en la web. */
+#live.host .left, #live.host #layout { display: none; }
+#live.host .main { flex-direction: column; }
+#live.host .chat { width: auto; flex: 1; border-left: 0; }
+#live.host #viewers { margin-right: auto; }

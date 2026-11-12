@@ -150,6 +150,8 @@ async fn handle(stream: TcpStream, shared: Arc<Shared>) {
     }
 
     let mut ok = send!(Message::text(welcome.to_string()));
+    // La ventana del streamer solo muestra el chat: no se le manda vídeo.
+    let frames = if is_host { Vec::new() } else { frames };
     for f in frames {
         if !ok { break; }
         ok = send!(Message::binary(f.to_vec()));
@@ -162,6 +164,7 @@ async fn handle(stream: TcpStream, shared: Arc<Shared>) {
         tokio::select! {
             out = rx.recv() => match out {
                 Ok(Out::Text(t)) => ok = send!(Message::text(t.to_string())),
+                Ok(Out::Bin(..)) if is_host => {}
                 Ok(Out::Bin(b, at)) => match gate.pass(b[0], at.elapsed() > MAX_LAG) {
                     Pass::Skip => {}
                     Pass::Send => ok = send!(Message::binary(b.to_vec())),
