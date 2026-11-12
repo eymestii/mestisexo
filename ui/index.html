@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0e0e10">
   <title>Mestisexo</title>
-  <link rel="stylesheet" href="style.css?v=0.4.2">
+  <link rel="stylesheet" href="style.css?v=0.4.6">
 </head>
 <body>
   <section id="host-setup" class="screen hidden">
@@ -32,16 +32,18 @@
       <span id="badge" class="badge">OFFLINE</span>
       <span id="uptime" class="hidden"></span>
       <span id="viewers">0 espectadores</span>
+      <span id="quality-indicator" class="quality-indicator hidden"></span>
       <div id="health" class="health hidden">
         <span id="h-obs" class="pill">OBS</span>
         <span id="h-rate" class="pill">— kbps</span>
         <span id="h-tunnel" class="pill hidden">Túnel</span>
+        <span id="h-quality" class="pill hidden" title="Calidad de conexión de espectadores">Calidad</span>
       </div>
     </header>
     <div class="main">
       <div class="left">
         <div class="player">
-          <video id="video" autoplay playsinline controls></video>
+          <video id="video" autoplay playsinline></video>
           <div id="placeholder">Esperando señal…</div>
           <div id="login-panel" class="login hidden">
             <p id="login-msg"></p>
@@ -69,6 +71,6 @@
     </div>
   </section>
 
-  <script src="app.js?v=0.4.2"></script>
+  <script src="app.js?v=0.4.6"></script>
 </body>
 </html>

@@ -8,6 +8,16 @@ Streaming en tiempo real con chat, en tres piezas:
 
 El chat se guarda solo en memoria (máximo 200 mensajes), se borra al terminar la sesión y nunca se escribe en disco.
 
+## Reproductor del espectador
+
+Encima del vídeo no se dibuja nada: ni barra de progreso (en un directo no hay nada que buscar) ni controles. Un clic sobre el vídeo activa o silencia el sonido, y un doble clic abre la pantalla completa.
+
+El reproductor va un poco por detrás del directo para absorber los baches de la red, y cuánto va depende de la red de cada espectador. Arranca en 0,5 s. Cada vez que el navegador se queda sin datos (evento `waiting`) el margen sube medio segundo, hasta un tope de 3 s; tras un minuto sin un solo corte baja un cuarto de segundo cada 30 s, hasta volver a 0,5 s. El valor aprendido se guarda en `localStorage`, así que quien tiene mala conexión arranca con holgura en vez de descubrirla a base de cortes.
+
+Sube rápido y baja despacio a propósito. Si subiera y bajara con la misma facilidad oscilaría, y a quien tiene una red regular le interesa más mantener el margen que recuperar medio segundo de cercanía al directo.
+
+Con buena conexión nada de esto se activa: el margen se queda en 0,5 s. Es el mismo canje que hacen las plataformas grandes, que van a unos 3 s del directo precisamente para no cortarse.
+
 ## Módulo del streamer (Arch Linux)
 
 ```sh
@@ -63,7 +73,7 @@ Con el servicio `mestisexo-auth`, solo pueden ver el stream los miembros de tu s
 
 - ffmpeg corta la señal en trozos de 0,25 s y los envía en cuanto salen, sin búfer de entrada.
 - Si un destino (el VPS o un espectador) lleva más de 1 s de retraso, se le descarta el vídeo atrasado y salta al siguiente fotograma clave. Nunca se le manda lo atrasado.
-- El reproductor va unos 0,5 s por detrás del último dato recibido. Si se retrasa, acelera un poco, y si pasa de 1,5 s salta al directo.
+- El reproductor va por detrás del último dato recibido lo que la red de cada espectador necesite: 0,5 s con buena conexión, hasta 3 s si se le corta (ver «Margen del reproductor»). Si pasa de 0,4 s sobre su objetivo acelera un 5 % hasta recuperarlo, y si pasa de 1 s sobre el objetivo salta al directo. La velocidad no cambia más de una vez cada 2 s a propósito: cada cambio obliga al navegador a reprocesar el audio, y hacerlo seguido lo corta.
 - Solo se guarda el último GOP (desde el último fotograma clave), para que quien entra vea imagen al momento.
 - En OBS usa **intervalo de fotogramas clave de 1 s** y el preset de baja latencia (x264: `tune=zerolatency`). Cuanto más corto el intervalo, antes se recupera el vídeo tras un corte.
 
