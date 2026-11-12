@@ -11,6 +11,8 @@ use tokio::task::JoinHandle;
 struct App {
     session: Mutex<Option<core::Handle>>,
     relay: Mutex<Option<JoinHandle<()>>>,
+    /// Inicio de sesión con Discord pendiente: puerto local y `state` esperado.
+    login: Mutex<Option<(tokio::net::TcpListener, String)>>,
 }
 
 #[derive(Serialize)]
@@ -209,48 +211,118 @@ async fn disconnect_viewer(app: State<'_, App>) -> Result<(), String> {
     Ok(())
 }
 
+/// En un AppImage, `AppRun` apunta `LD_LIBRARY_PATH`, GTK, GStreamer, etc. a
+/// las bibliotecas empaquetadas. Un navegador lanzado con ese entorno las
+/// hereda y se cierra al arrancar, así que se le pasa el entorno original.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn clean_appimage_env(cmd: &mut std::process::Command) {
+    let Some(appdir) = std::env::var_os("APPDIR").filter(|_| std::env::var_os("APPIMAGE").is_some()) else { return };
+    let appdir = appdir.to_string_lossy().into_owned();
+    for (k, v) in std::env::vars_os() {
+        let key = k.to_string_lossy();
+        let val = v.to_string_lossy();
+        let bundled = ["LD_LIBRARY_PATH", "LD_PRELOAD", "PYTHONPATH", "PYTHONHOME", "PERLLIB", "QT_PLUGIN_PATH", "GI_TYPELIB_PATH", "GSETTINGS_SCHEMA_DIR", "GIO_MODULE_DIR", "GIO_EXTRA_MODULES", "GDK_PIXBUF_MODULE_FILE", "GDK_PIXBUF_MODULEDIR", "GTK_THEME", "GTK_DATA_PREFIX", "GTK_EXE_PREFIX", "GTK_PATH", "GTK_IM_MODULE_FILE", "APPDIR", "APPIMAGE", "ARGV0", "OWD"];
+        if bundled.contains(&key.as_ref()) || key.starts_with("GST_") {
+            cmd.env_remove(&k);
+        } else if val.contains(&appdir) && (key == "PATH" || key == "XDG_DATA_DIRS" || key == "XDG_CONFIG_DIRS") {
+            let rest: Vec<&str> = val.split(':').filter(|p| !p.is_empty() && !p.starts_with(&appdir)).collect();
+            if rest.is_empty() { cmd.env_remove(&k); } else { cmd.env(&k, rest.join(":")); }
+        }
+    }
+}
+
 /// Abre una dirección https:// en el navegador del sistema.
 fn open_browser(url: &str) -> Result<(), String> {
     if !url.starts_with("https://") || url.chars().any(|c| c.is_whitespace() || c == '"') {
         return Err("Dirección no válida".into());
     }
     #[cfg(windows)]
-    let mut cmd = {
+    let candidates: Vec<std::process::Command> = {
         use std::os::windows::process::CommandExt;
         let mut c = std::process::Command::new("rundll32");
         c.args(["url.dll,FileProtocolHandler", url]).creation_flags(0x0800_0000);
-        c
+        vec![c]
     };
     #[cfg(target_os = "macos")]
-    let mut cmd = {
+    let candidates: Vec<std::process::Command> = {
         let mut c = std::process::Command::new("open");
         c.arg(url);
-        c
+        vec![c]
     };
     #[cfg(all(unix, not(target_os = "macos")))]
-    let mut cmd = {
-        let mut c = std::process::Command::new("xdg-open");
-        c.arg(url);
-        c
-    };
-    cmd.spawn().map(|_| ()).map_err(|e| format!("No se pudo abrir el navegador: {e}"))
+    let candidates: Vec<std::process::Command> = [&["xdg-open"][..], &["gio", "open"], &["sensible-browser"]]
+        .iter()
+        .map(|argv| {
+            let mut c = std::process::Command::new(argv[0]);
+            c.args(&argv[1..]).arg(url);
+            clean_appimage_env(&mut c);
+            c
+        })
+        .collect();
+
+    let mut last = String::from("no se encontró ningún programa para abrir enlaces");
+    for mut cmd in candidates {
+        cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => { last = e.to_string(); continue; }
+        };
+        // xdg-open suele terminar enseguida; si falla, probar el siguiente. Si
+        // sigue en marcha (lanzó el navegador en primer plano), darlo por bueno.
+        let start = std::time::Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(st)) if st.success() => return Ok(()),
+                Ok(Some(st)) => { last = format!("terminó con {st}"); break; }
+                Ok(None) if start.elapsed() < std::time::Duration::from_secs(3) => std::thread::sleep(std::time::Duration::from_millis(50)),
+                Ok(None) => {
+                    std::thread::spawn(move || { let _ = child.wait(); });
+                    return Ok(());
+                }
+                Err(e) => { last = e.to_string(); break; }
+            }
+        }
+    }
+    Err(format!("No se pudo abrir el navegador ({last})"))
 }
 
 #[tauri::command]
 async fn open_url(url: String) -> Result<(), String> {
-    open_browser(&url)
+    tauri::async_runtime::spawn_blocking(move || open_browser(&url)).await.map_err(|e| e.to_string())?
 }
 
-/// Inicio de sesión con Discord: abre el navegador en el servicio de cuentas
-/// y espera a que este redirija a un puerto local con un código de un solo uso.
+#[derive(Serialize)]
+struct LoginStart {
+    url: String,
+    /// `None` si el navegador se abrió; si no, el motivo.
+    error: Option<String>,
+}
+
+/// Primer paso del inicio de sesión con Discord: abre un puerto local donde el
+/// servicio de cuentas devolverá un código de un solo uso e intenta abrir el
+/// navegador. Devuelve el enlace para poder copiarlo si el navegador no abre.
 #[tauri::command]
-async fn discord_login(auth_url: String) -> Result<String, String> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let base = auth_url.trim_end_matches('/');
+async fn discord_login_start(app: State<'_, App>, auth_url: String) -> Result<LoginStart, String> {
+    let base = auth_url.trim_end_matches('/').to_string();
+    if !base.starts_with("https://") {
+        return Err("Dirección del servicio de cuentas no válida".into());
+    }
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let state = core::random_token(32);
-    open_browser(&format!("{base}/login?port={port}&state={state}"))?;
+    let url = format!("{base}/login?port={port}&state={state}");
+    // Un inicio anterior sin terminar queda sustituido.
+    *app.login.lock().await = Some((listener, state));
+    let u = url.clone();
+    let error = tauri::async_runtime::spawn_blocking(move || open_browser(&u)).await.map_err(|e| e.to_string())?.err();
+    Ok(LoginStart { url, error })
+}
+
+/// Segundo paso: espera a que el navegador vuelva con el código.
+#[tauri::command]
+async fn discord_login_wait(app: State<'_, App>) -> Result<String, String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (listener, state) = app.login.lock().await.take().ok_or("No hay ningún inicio de sesión en curso")?;
 
     let wait = async {
         loop {
@@ -275,7 +347,7 @@ async fn discord_login(auth_url: String) -> Result<String, String> {
             }
         }
     };
-    tokio::time::timeout(std::time::Duration::from_secs(300), wait)
+    tokio::time::timeout(std::time::Duration::from_secs(600), wait)
         .await
         .map_err(|_| "Se agotó el tiempo para iniciar sesión".to_string())?
 }
@@ -298,7 +370,8 @@ fn main() {
             connect_viewer,
             disconnect_viewer,
             open_url,
-            discord_login
+            discord_login_start,
+            discord_login_wait
         ])
         .on_window_event(|w, e| {
             if let tauri::WindowEvent::Destroyed = e {

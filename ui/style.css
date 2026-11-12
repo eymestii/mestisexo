@@ -76,3 +76,5 @@ header #layout { margin-right: auto; }
 .account { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
 .account b { margin-right: auto; }
 .account button { padding: 4px 10px; font-size: 12px; }
+.login-link { display: flex; gap: 8px; align-items: center; max-width: 100%; }
+.login-link code { background: var(--panel); padding: 6px 8px; border-radius: 4px; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 420px; user-select: all; }

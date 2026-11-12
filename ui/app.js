@@ -378,22 +378,39 @@ function authNeeded(e) {
   $("login-invite").dataset.url = e.invite || "";
 }
 
+// Cada clic empieza un inicio de sesión nuevo; el resultado de uno anterior se ignora.
+let loginSeq = 0;
+
 $("login-discord").addEventListener("click", async () => {
-  $("login-msg").textContent = "Termina el inicio de sesión en el navegador…";
-  $("login-discord").disabled = true;
+  const seq = ++loginSeq;
+  $("login-link").classList.add("hidden");
+  $("login-msg").textContent = "Abriendo el navegador…";
   try {
-    const code = await invoke("discord_login", { authUrl });
+    const start = await invoke("discord_login_start", { authUrl });
+    if (seq !== loginSeq) return;
+    $("login-url").textContent = start.url;
+    $("login-link").classList.remove("hidden");
+    $("login-msg").textContent = start.error
+      ? `${start.error}. Copia el enlace y ábrelo en tu navegador.`
+      : "Termina el inicio de sesión en el navegador. Si no se abrió, copia el enlace.";
+    const code = await invoke("discord_login_wait");
+    if (seq !== loginSeq) return;
     const r = await fetch(`${authUrl}/api/exchange?code=${encodeURIComponent(code)}`, { method: "POST" });
     const body = await r.json().catch(() => ({}));
     if (!r.ok || !body.token) throw new Error("No se pudo completar el inicio de sesión.");
     localStorage.setItem(tokenKey(), body.token);
     $("login-panel").classList.add("hidden");
+    $("login-link").classList.add("hidden");
     connect(viewerUrl);
   } catch (e) {
-    $("login-msg").textContent = String(e.message || e);
-  } finally {
-    $("login-discord").disabled = false;
+    if (seq === loginSeq) $("login-msg").textContent = String(e.message || e);
   }
+});
+
+$("login-copy").addEventListener("click", () => {
+  navigator.clipboard.writeText($("login-url").textContent).then(
+    () => { $("login-copy").textContent = "Copiado"; setTimeout(() => ($("login-copy").textContent = "Copiar enlace"), 1500); },
+    () => {});
 });
 
 $("login-invite").addEventListener("click", () => {
