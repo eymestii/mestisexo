@@ -134,7 +134,7 @@ async fn start_stream(
     let tunnel = vps.map(|target| core::Tunnel {
         target,
         identity: vps_key.map(|k| expand_home(k.trim())).filter(|k| !k.is_empty()),
-        remote_port: ws_port,
+        upstream_port: core::REPEATER_UPSTREAM_PORT,
     });
     let keys = load_keys(&handle)?;
     let mut slot = app.session.lock().await;
@@ -155,7 +155,7 @@ async fn start_stream(
         rtmp_server: h.rtmp_server.clone(),
         stream_key: h.stream_key.clone(),
         ws_port: h.ws_port,
-        key: h.key().to_string(),
+        key: h.key(),
         host_token: h.host_token().to_string(),
         vps_host,
         tailscale_ip: core::tailscale_ip().map(|ip| ip.to_string()),

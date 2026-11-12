@@ -30,6 +30,8 @@ jobs:
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ runner.os == 'Linux' && 'x86_64-unknown-linux-musl' || '' }}
       - uses: Swatinem/rust-cache@v2
 
       - name: Instalar tauri-cli
@@ -39,6 +41,16 @@ jobs:
         working-directory: app
         run: cargo tauri build --bundles ${{ matrix.bundles }}
 
+      - name: Repetidor para el VPS
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y musl-tools
+          cargo build --release -p mestisexo-core --bin mestisexo-repeater --target x86_64-unknown-linux-musl
+          mkdir -p target/repeater
+          tar -czf target/repeater/mestisexo-repeater-x86_64-linux.tar.gz \
+            -C target/x86_64-unknown-linux-musl/release mestisexo-repeater \
+            -C "$GITHUB_WORKSPACE/deploy" mestisexo-repeater.service 50-mestisexo-stream.conf
+
       - uses: actions/upload-artifact@v4
         with:
           name: mestisexo-${{ runner.os }}
@@ -46,6 +58,7 @@ jobs:
             target/release/bundle/deb/*.deb
             target/release/bundle/appimage/*.AppImage
             target/release/bundle/nsis/*.exe
+            target/repeater/*.tar.gz
 
       - name: Publicar en la release
         if: startsWith(github.ref, 'refs/tags/')
@@ -55,3 +68,4 @@ jobs:
             target/release/bundle/deb/*.deb
             target/release/bundle/appimage/*.AppImage
             target/release/bundle/nsis/*.exe
+            target/repeater/*.tar.gz

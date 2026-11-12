@@ -1,6 +1,6 @@
 [package]
 name = "mestisexo-core"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
@@ -8,6 +8,7 @@ futures-util = { version = "0.3", default-features = false, features = ["sink", 
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+socket2 = "0.6"
 tokio = { version = "1", features = ["rt", "net", "process", "sync", "time", "io-util", "macros"] }
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
 

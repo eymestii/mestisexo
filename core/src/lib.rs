@@ -1,53 +1,63 @@
-//! Núcleo del servidor de streaming local.
+//! Núcleo del servidor de streaming.
 //!
 //! - Recibe la señal de OBS por RTMP (ffmpeg en modo `-listen`) y la remuxa a
 //!   MP4 fragmentado sin recodificar.
-//! - Reparte los fragmentos y el chat a los espectadores por WebSocket.
+//! - Reparte los fragmentos y el chat a los espectadores por WebSocket, o
+//!   envía una sola copia a un repetidor en un VPS que los reparte por él.
+//! - Prioriza el directo: a quien va con retraso se le descarta vídeo y se le
+//!   salta al último keyframe en vez de mandarle lo atrasado.
 //! - El chat vive solo en memoria: se limita a `MAX_HISTORY` mensajes y se
 //!   borra al terminar la sesión.
 
+mod repeater;
 mod tunnel;
 mod video;
 mod ws;
 
+pub use repeater::{run as run_repeater, RepeaterConfig};
 pub use tunnel::Tunnel;
 
 use rand::{distributions::Alphanumeric, Rng};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::io;
 use std::net::{IpAddr, UdpSocket};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
+
+/// Puerto (solo loopback en el VPS) donde el repetidor espera al streamer.
+pub const REPEATER_UPSTREAM_PORT: u16 = 8091;
 
 pub(crate) const MAX_HISTORY: usize = 200;
 pub(crate) const MAX_VIEWERS: usize = 100;
 
-pub struct Config {
-    /// Puerto TCP donde escuchan los espectadores (WebSocket).
-    pub ws_port: u16,
-    /// Puerto RTMP local al que se conecta OBS.
-    pub rtmp_port: u16,
-    /// Ruta o nombre del ejecutable de ffmpeg.
-    pub ffmpeg: String,
-    /// Publicar a través de un VPS con un túnel SSH inverso.
-    pub tunnel: Option<Tunnel>,
-    /// Clave fija para espectadores; si es `None` se genera una nueva.
-    pub viewer_key: Option<String>,
-    /// Clave de stream fija para OBS; si es `None` se genera una nueva.
-    pub stream_key: Option<String>,
-}
+/// Primer byte de cada mensaje binario: INIT = segmento de inicialización,
+/// FRAG_KEY = fragmento que empieza en keyframe, FRAG_DELTA = fragmento que
+/// depende de los anteriores.
+pub(crate) const INIT: u8 = 0;
+pub(crate) const FRAG_KEY: u8 = 1;
+pub(crate) const FRAG_DELTA: u8 = 2;
+
+/// Retraso máximo de un fragmento en cada salto (PC → VPS → espectador) antes
+/// de descartarlo y saltar al directo.
+pub(crate) const MAX_LAG: Duration = Duration::from_millis(1000);
+
+/// Tope de fragmentos guardados desde el último keyframe (≈10 s con fragmentos de 0,25 s).
+const MAX_GOP_FRAGS: usize = 40;
 
 #[derive(Clone)]
 pub(crate) enum Out {
     Text(Arc<str>),
-    Bin(Arc<Vec<u8>>),
+    /// Momento en que se generó, para descartar lo que llega tarde a un espectador lento.
+    Bin(Arc<Vec<u8>>, Instant),
+    /// Cierra todas las conexiones de espectadores (la clave ha cambiado).
+    Kick,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct ChatMsg {
     pub id: u64,
     pub name: String,
@@ -56,15 +66,101 @@ pub(crate) struct ChatMsg {
     pub host: bool,
 }
 
+/// Lo justo para que quien entra pueda decodificar al momento: el init y los
+/// fragmentos desde el último keyframe. Nada más antiguo.
+#[derive(Default)]
+pub(crate) struct Cache {
+    pub init: Option<Arc<Vec<u8>>>,
+    pub gop: Vec<Arc<Vec<u8>>>,
+}
+
+impl Cache {
+    pub fn push(&mut self, b: &Arc<Vec<u8>>) {
+        match b.first() {
+            Some(&INIT) => {
+                self.init = Some(b.clone());
+                self.gop.clear();
+            }
+            Some(&FRAG_KEY) => {
+                self.gop.clear();
+                self.gop.push(b.clone());
+            }
+            _ if !self.gop.is_empty() && self.gop.len() < MAX_GOP_FRAGS => self.gop.push(b.clone()),
+            _ => self.gop.clear(),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.init = None;
+        self.gop.clear();
+    }
+
+    /// Init seguido del GOP actual.
+    pub fn frames(&self) -> Vec<Arc<Vec<u8>>> {
+        self.init.iter().chain(self.gop.iter()).cloned().collect()
+    }
+}
+
+/// Decide, para una conexión, qué fragmentos se envían tras perder datos: los
+/// que dependen de fragmentos descartados no se pueden decodificar, así que
+/// se espera al siguiente keyframe.
+#[derive(Default)]
+pub(crate) struct Gate {
+    resync: bool,
+    need_init: bool,
+}
+
+pub(crate) enum Pass {
+    Skip,
+    Send,
+    InitThenSend,
+}
+
+impl Gate {
+    /// Se han perdido mensajes; `init_too` si entre ellos pudo ir un init.
+    pub fn lost(&mut self, init_too: bool) {
+        self.resync = true;
+        self.need_init |= init_too;
+    }
+
+    /// `late`: el destino va con retraso y hay que descartar.
+    pub fn pass(&mut self, kind: u8, late: bool) -> Pass {
+        if kind == INIT {
+            self.need_init = false;
+            return Pass::Send;
+        }
+        if late {
+            self.resync = true;
+            return Pass::Skip;
+        }
+        if self.resync {
+            if kind != FRAG_KEY {
+                return Pass::Skip;
+            }
+            self.resync = false;
+            if std::mem::take(&mut self.need_init) {
+                return Pass::InitThenSend;
+            }
+        }
+        Pass::Send
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct State {
-    /// Códec MSE + segmento de inicialización (con byte de tipo 0 delante).
-    pub init: Option<(String, Arc<Vec<u8>>)>,
-    /// Último fragmento (empieza siempre en keyframe), para que quien entra vea algo al momento.
-    pub last_frag: Option<Arc<Vec<u8>>>,
+    /// Clave que deben presentar los espectadores (en el repetidor la envía el streamer).
+    pub key: String,
+    /// Códec MSE de la señal actual.
+    pub codec: Option<String>,
+    pub cache: Cache,
     pub chat: VecDeque<ChatMsg>,
     pub next_id: u64,
+    /// Espectadores conectados directamente a este proceso.
     pub viewers: usize,
+    /// Espectadores conectados a través del repetidor (solo en el streamer).
+    pub relay_viewers: usize,
+    /// Total que comunica el streamer (solo en el repetidor).
+    pub upstream_total: Option<usize>,
     pub status: String,
     pub tunnel_status: Option<String>,
     pub tunnel_up: Option<bool>,
@@ -75,14 +171,51 @@ pub(crate) struct State {
     pub last_data_ms: u64,
 }
 
+impl State {
+    pub fn live(&self) -> bool {
+        self.cache.init.is_some()
+    }
+
+    pub fn total_viewers(&self) -> usize {
+        self.upstream_total.unwrap_or(self.viewers + self.relay_viewers)
+    }
+
+    pub fn welcome(&self, host: bool) -> serde_json::Value {
+        serde_json::json!({
+            "t": "welcome",
+            "history": &self.chat,
+            "live": self.live(),
+            "codec": self.codec,
+            "viewers": self.total_viewers(),
+            "host": host,
+        })
+    }
+}
+
 pub(crate) struct Shared {
-    pub key: String,
     pub host_token: String,
+    pub max_viewers: usize,
+    /// `true` en el repetidor del VPS: el chat y el recuento van al streamer.
+    pub relay_mode: bool,
     pub tx: broadcast::Sender<Out>,
     pub state: Mutex<State>,
+    /// En el repetidor, canal hacia el streamer mientras está conectado.
+    pub upstream: Mutex<Option<mpsc::Sender<String>>>,
 }
 
 impl Shared {
+    pub fn new(key: String, max_viewers: usize, relay_mode: bool, status: &str) -> Arc<Self> {
+        let (tx, _) = broadcast::channel(64);
+        Arc::new(Shared {
+            host_token: random_token(32),
+            max_viewers,
+            relay_mode,
+            tx,
+            state: Mutex::new(State { key, status: status.into(), ..Default::default() }),
+            upstream: Mutex::new(None),
+        })
+    }
+
     pub fn lock(&self) -> std::sync::MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -107,6 +240,31 @@ impl Shared {
         // Se envía con el lock tomado para mantener el orden respecto al historial.
         self.send_json(json);
     }
+
+    /// Mensaje de chat de un espectador conectado a este proceso.
+    pub fn chat_from(&self, name: String, text: String, host: bool) {
+        if self.relay_mode {
+            self.to_upstream(serde_json::json!({ "t": "chat", "name": name, "text": text }));
+        } else {
+            self.push_chat(name, text, host);
+        }
+    }
+
+    pub fn viewers_changed(&self) {
+        if self.relay_mode {
+            let n = self.lock().viewers;
+            self.to_upstream(serde_json::json!({ "t": "viewers", "n": n }));
+        } else {
+            let n = self.lock().total_viewers();
+            self.send_json(serde_json::json!({ "t": "viewers", "n": n }));
+        }
+    }
+
+    fn to_upstream(&self, v: serde_json::Value) {
+        if let Some(tx) = self.upstream.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            let _ = tx.try_send(v.to_string());
+        }
+    }
 }
 
 pub(crate) fn now_ms() -> u64 {
@@ -115,6 +273,25 @@ pub(crate) fn now_ms() -> u64 {
 
 pub fn random_token(len: usize) -> String {
     rand::thread_rng().sample_iter(&Alphanumeric).take(len).map(char::from).collect()
+}
+
+pub(crate) fn valid_key(k: &str) -> bool {
+    !k.is_empty() && k.len() <= 64 && k.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+pub struct Config {
+    /// Puerto TCP donde escuchan los espectadores (WebSocket).
+    pub ws_port: u16,
+    /// Puerto RTMP local al que se conecta OBS.
+    pub rtmp_port: u16,
+    /// Ruta o nombre del ejecutable de ffmpeg.
+    pub ffmpeg: String,
+    /// Enviar la señal a un repetidor en un VPS (por SSH) que la reparte.
+    pub tunnel: Option<Tunnel>,
+    /// Clave fija para espectadores; si es `None` se genera una nueva.
+    pub viewer_key: Option<String>,
+    /// Clave de stream fija para OBS; si es `None` se genera una nueva.
+    pub stream_key: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -143,8 +320,8 @@ pub struct Handle {
 }
 
 impl Handle {
-    pub fn key(&self) -> &str {
-        &self.shared.key
+    pub fn key(&self) -> String {
+        self.shared.lock().key.clone()
     }
 
     pub fn host_token(&self) -> &str {
@@ -154,8 +331,8 @@ impl Handle {
     pub fn status(&self) -> Status {
         let st = self.shared.lock();
         Status {
-            live: st.init.is_some(),
-            viewers: st.viewers,
+            live: st.live(),
+            viewers: st.total_viewers(),
             chat_messages: st.chat.len(),
             status: st.status.clone(),
             tunnel: st.tunnel_status.clone(),
@@ -177,6 +354,8 @@ impl Handle {
     /// Detiene la sesión y espera a que se liberen los puertos.
     pub async fn stop(mut self) {
         self.shared.send_json(serde_json::json!({ "t": "end" }));
+        // Dar un momento a que el aviso salga hacia los espectadores y el repetidor.
+        tokio::time::sleep(Duration::from_millis(150)).await;
         let tasks = std::mem::take(&mut self.tasks);
         for t in &tasks {
             t.abort();
@@ -203,13 +382,8 @@ pub async fn start(cfg: Config) -> io::Result<Handle> {
     })?;
     let ws_port = listener.local_addr()?.port();
 
-    let (tx, _) = broadcast::channel(64);
-    let shared = Arc::new(Shared {
-        key: cfg.viewer_key.clone().unwrap_or_else(|| random_token(10)),
-        host_token: random_token(32),
-        tx,
-        state: Mutex::new(State { status: "Esperando a OBS…".into(), ..Default::default() }),
-    });
+    let key = cfg.viewer_key.clone().unwrap_or_else(|| random_token(10));
+    let shared = Shared::new(key, MAX_VIEWERS, false, "Esperando a OBS…");
 
     // RTMP solo en loopback: ffmpeg no valida la clave de stream, así que no
     // se expone a la red. OBS debe correr en el mismo equipo.
@@ -222,7 +396,7 @@ pub async fn start(cfg: Config) -> io::Result<Handle> {
         tokio::spawn(video::run(shared.clone(), cfg.ffmpeg, rtmp_url)),
     ];
     if let Some(t) = cfg.tunnel {
-        tasks.push(tokio::spawn(tunnel::run(shared.clone(), t, ws_port)));
+        tasks.push(tokio::spawn(tunnel::run(shared.clone(), t)));
     }
 
     Ok(Handle { shared, tasks, ws_port, rtmp_server, stream_key })
@@ -234,7 +408,7 @@ pub async fn start(cfg: Config) -> io::Result<Handle> {
 pub async fn relay(remote: String) -> io::Result<(u16, JoinHandle<()>)> {
     // Comprobar que el destino responde antes de dar el puerto al webview.
     let probe = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
+        Duration::from_secs(5),
         tokio::net::TcpStream::connect(remote.as_str()),
     )
     .await

@@ -1,0 +1,21 @@
+[Unit]
+Description=Mestisexo: repetidor de streaming
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/mestisexo-repeater --listen 0.0.0.0:8090 --upstream 127.0.0.1:8091 --max-viewers 500
+Restart=always
+RestartSec=2
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+MemoryMax=256M
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

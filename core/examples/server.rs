@@ -8,7 +8,7 @@ async fn main() {
         tunnel: std::env::var("VPS").ok().map(|target| mestisexo_core::Tunnel {
             target,
             identity: std::env::var("VPS_KEY").ok(),
-            remote_port: 8090,
+            upstream_port: mestisexo_core::REPEATER_UPSTREAM_PORT,
         }),
         viewer_key: None,
         stream_key: None,

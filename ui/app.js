@@ -3,6 +3,9 @@
 const invoke = window.__TAURI__.core.invoke;
 const $ = (id) => document.getElementById(id);
 const MAX_LINES = 200;
+// Segundos por detrás del directo: objetivo, y a partir de cuánto se salta.
+const LIVE_TARGET = 0.5;
+const LIVE_JUMP = 1.5;
 
 let ws = null;
 let mode = null;            // "host" | "viewer"
@@ -17,7 +20,7 @@ function show(id) {
 // ---------- Reproductor (MediaSource con MP4 fragmentado) ----------
 
 const player = {
-  ms: null, sb: null, queue: [], codec: null,
+  ms: null, sb: null, queue: [], codec: null, waitKey: false, timer: null,
 
   reset(codec) {
     this.destroy();
@@ -35,23 +38,44 @@ const player = {
       this.sb.addEventListener("updateend", () => this.flush());
       this.flush();
     }, { once: true });
+    // Revisar también sin datos nuevos: si el vídeo se queda parado en un hueco
+    // o se retrasa, flush() lo devuelve al directo.
+    this.timer = setInterval(() => this.flush(), 250);
   },
 
-  push(buf) {
+  // kind: 0 = init, 1 = fragmento con keyframe, 2 = fragmento que depende de los anteriores.
+  push(kind, buf) {
     if (!this.ms) return;
+    if (kind === 0) { this.waitKey = false; this.queue.push(buf); this.flush(); return; }
+    // Si se han perdido fragmentos, los siguientes no se pueden decodificar
+    // hasta el próximo keyframe.
+    if (this.waitKey && kind !== 1) return;
+    this.waitKey = false;
     this.queue.push(buf);
-    if (this.queue.length > 60) this.queue.splice(0, this.queue.length - 30);
+    if (this.queue.length > 8) { this.queue = []; this.waitKey = true; }
     this.flush();
   },
 
   flush() {
     const sb = this.sb, v = $("video");
     if (!sb || sb.updating || this.ms.readyState !== "open") return;
-    // Mantener el búfer corto y seguir el directo.
-    if (sb.buffered.length) {
-      const start = sb.buffered.start(0), end = sb.buffered.end(sb.buffered.length - 1);
-      if (v.currentTime < start || end - v.currentTime > 4) v.currentTime = Math.max(start, end - 1);
-      if (v.currentTime - start > 30) { sb.remove(start, v.currentTime - 10); return; }
+    // Ir pegado al directo: objetivo LIVE_TARGET s por detrás del último dato.
+    const b = sb.buffered;
+    if (b.length) {
+      const start = b.start(0), end = b.end(b.length - 1), behind = end - v.currentTime;
+      if (behind > LIVE_JUMP) v.currentTime = end - LIVE_TARGET;
+      else {
+        // Saltar huecos: si el tiempo actual no cae dentro de ningún rango con
+        // datos, el vídeo se quedaría congelado esperando algo que no va a llegar.
+        for (let i = 0; i < b.length; i++) {
+          if (v.currentTime >= b.start(i) && v.currentTime < b.end(i)) break;
+          if (v.currentTime < b.start(i)) { v.currentTime = b.start(i); break; }
+        }
+      }
+      // Pequeños retrasos se recuperan acelerando un poco, sin saltos visibles.
+      v.playbackRate = behind > LIVE_TARGET + 0.4 ? 1.08 : 1;
+      // Guardar solo unos segundos ya vistos.
+      if (v.currentTime - start > 8) { sb.remove(start, v.currentTime - 3); return; }
     }
     const next = this.queue.shift();
     if (!next) return;
@@ -63,7 +87,8 @@ const player = {
   },
 
   destroy() {
-    this.queue = []; this.sb = null; this.codec = null;
+    clearInterval(this.timer); this.timer = null;
+    this.queue = []; this.sb = null; this.codec = null; this.waitKey = false;
     const v = $("video");
     if (this.ms) { v.removeAttribute("src"); v.load(); this.ms = null; }
   },
@@ -136,7 +161,7 @@ function connect(url) {
     if (typeof e.data !== "string") {
       const bytes = new Uint8Array(e.data);
       if (bytes[0] === 0 && !player.ms) return;
-      player.push(bytes.subarray(1));
+      player.push(bytes[0], bytes.subarray(1));
       return;
     }
     const msg = JSON.parse(e.data);
