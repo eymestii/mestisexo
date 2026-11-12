@@ -8,6 +8,14 @@ Streaming en tiempo real con chat, en tres piezas:
 
 El chat se guarda solo en memoria (máximo 200 mensajes), se borra al terminar la sesión y nunca se escribe en disco.
 
+## Calidad de conexión del espectador
+
+La web mide el ancho de banda que recibe cada espectador (bytes por segundo del propio stream) y lo que le queda en el búfer, y lo resume en una etiqueta en la cabecera: «Buena conexión», «Conexión media» o «Conexión lenta». Es informativo: no cambia la calidad del vídeo, que es única para todos.
+
+Cuando un espectador baja de 1 Mbit/s, su navegador manda un aviso al repetidor, que lleva la cuenta y la pasa al streamer. En la ventana del streamer aparece entonces una píldora con el porcentaje de espectadores con problemas y, al pasar el ratón, el ancho de banda medio de la audiencia. Si ese porcentaje sube, baja el bitrate en OBS.
+
+Dos limitaciones de esa píldora: los contadores son acumulativos desde que arrancó la sesión, así que un espectador que tuvo un bache al principio sigue contando durante horas, y solo informan los espectadores con problemas, por lo que el porcentaje queda sesgado hacia arriba. Sirve para ver una tendencia, no como medida exacta.
+
 ## Reproductor del espectador
 
 Encima del vídeo no se dibuja nada: ni barra de progreso (en un directo no hay nada que buscar) ni controles. Un clic sobre el vídeo activa o silencia el sonido, y un doble clic abre la pantalla completa.

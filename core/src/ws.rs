@@ -19,11 +19,27 @@ const MSG_INTERVAL: Duration = Duration::from_millis(700);
 pub(crate) const SEND_BUFFER: usize = 128 * 1024;
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Estadísticas de calidad de red reportadas por los clientes
+#[derive(Default)]
+pub(crate) struct QualityStats {
+    pub poor_count: usize,
+    pub fair_count: usize,
+    pub good_count: usize,
+    pub total_reports: usize,
+    pub avg_bandwidth: f32,
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "t", rename_all = "lowercase")]
 enum In {
     Chat { text: String },
     Ping,
+    #[serde(rename = "quality_hint")]
+    QualityHint { 
+        bandwidth: u32,
+        #[serde(rename = "bufferHealth")]
+        buffer_health: f32,
+    },
 }
 
 pub(crate) async fn serve(listener: TcpListener, shared: Arc<Shared>) {
@@ -186,11 +202,50 @@ async fn handle(stream: TcpStream, shared: Arc<Shared>) {
             },
             msg = source.next() => match msg {
                 Some(Ok(Message::Text(t))) => {
-                    if let Ok(In::Chat { text }) = serde_json::from_str::<In>(&t) {
-                        let text = clean(&text, MAX_TEXT);
-                        if !text.is_empty() && last_msg.elapsed() >= MSG_INTERVAL {
-                            last_msg = Instant::now();
-                            shared.chat_from(name.clone(), text, is_host, sub);
+                    if let Ok(msg_in) = serde_json::from_str::<In>(&t) {
+                        match msg_in {
+                            In::Chat { text } => {
+                                let text = clean(&text, MAX_TEXT);
+                                if !text.is_empty() && last_msg.elapsed() >= MSG_INTERVAL {
+                                    last_msg = Instant::now();
+                                    shared.chat_from(name.clone(), text, is_host, sub);
+                                }
+                            }
+                            In::Ping => {}
+                            In::QualityHint { bandwidth, buffer_health } if !is_host => {
+                                // Actualizar estadísticas de calidad
+                                let mut st = shared.lock();
+                                st.quality_stats.total_reports += 1;
+                                
+                                // Clasificar la calidad según el bandwidth
+                                if bandwidth < 1000 || buffer_health < 0.3 {
+                                    st.quality_stats.poor_count += 1;
+                                } else if bandwidth < 1500 || buffer_health < 0.5 {
+                                    st.quality_stats.fair_count += 1;
+                                } else {
+                                    st.quality_stats.good_count += 1;
+                                }
+                                
+                                // Calcular promedio móvil del bandwidth
+                                let alpha = 0.3; // Factor de suavizado
+                                if st.quality_stats.avg_bandwidth == 0.0 {
+                                    st.quality_stats.avg_bandwidth = bandwidth as f32;
+                                } else {
+                                    st.quality_stats.avg_bandwidth = 
+                                        alpha * (bandwidth as f32) + (1.0 - alpha) * st.quality_stats.avg_bandwidth;
+                                }
+                                
+                                // Si en modo relay, reenviar al streamer
+                                if shared.relay_mode {
+                                    drop(st);
+                                    shared.to_upstream(serde_json::json!({
+                                        "t": "quality_hint",
+                                        "bandwidth": bandwidth,
+                                        "bufferHealth": buffer_health
+                                    }));
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
