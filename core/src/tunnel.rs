@@ -211,8 +211,7 @@ fn from_repeater(shared: &Shared, data: &[u8]) {
         Some("quality_hint") => {
             let poor = v["poor"].as_bool().unwrap_or(false);
             let bw = v["bandwidth"].as_f64().unwrap_or(0.0) as f32;
-            let mut st = shared.lock();
-            let q = &mut st.quality_stats;
+            let mut q = shared.quality();
             if poor {
                 q.poor_now += 1;
             } else {

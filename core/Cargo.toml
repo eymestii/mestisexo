@@ -4,13 +4,16 @@ version = "0.4.2"
 edition = "2021"
 
 [dependencies]
+bytes = "1"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 socket2 = "0.6"
-tokio = { version = "1", features = ["rt", "net", "process", "sync", "time", "io-util", "macros"] }
-tokio-tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
+# rt-multi-thread lo usa el repetidor del VPS para repartir entre núcleos. La app
+# de escritorio no paga nada por él: Tauri ya lo activa.
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "process", "sync", "time", "io-util", "macros"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

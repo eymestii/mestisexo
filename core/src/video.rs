@@ -1,4 +1,5 @@
 use crate::{Out, Shared, FRAG_DELTA, FRAG_KEY, INIT};
+use bytes::Bytes;
 use std::io;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -120,7 +121,7 @@ async fn pump<R: AsyncRead + Unpin>(shared: &Shared, r: &mut R) -> io::Result<()
             b"moov" => {
                 init.extend_from_slice(&data);
                 let codec = codec_string(&data);
-                let init = Arc::new(std::mem::replace(&mut init, vec![INIT]));
+                let init = Bytes::from(std::mem::replace(&mut init, vec![INIT]));
                 let mut st = shared.lock();
                 st.codec = Some(codec.clone());
                 st.cache.push(&init);
@@ -136,7 +137,7 @@ async fn pump<R: AsyncRead + Unpin>(shared: &Shared, r: &mut R) -> io::Result<()
             }
             b"mdat" if !frag.is_empty() => {
                 frag.extend_from_slice(&data);
-                let f = Arc::new(std::mem::take(&mut frag));
+                let f = Bytes::from(std::mem::take(&mut frag));
                 let mut st = shared.lock();
                 st.bytes_total += f.len() as u64;
                 st.frags_total += 1;

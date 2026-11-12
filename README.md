@@ -96,10 +96,12 @@ Con el servicio `mestisexo-auth`, solo pueden ver el stream los miembros de tu s
 
 Medido con el repetidor y Caddy reales y espectadores simulados por wss, a 2,5 Mbit/s:
 
-| Espectadores | RAM (Caddy + repetidor) | CPU (de 4 núcleos) | Subida necesaria |
+| Espectadores | RAM (Caddy + repetidor) | CPU (núcleos) | Subida necesaria |
 |---|---|---|---|
 | 100 | 62 MB | 0,14 | 250 Mbit/s |
 | 250 | 99 MB | 0,36 | 625 Mbit/s |
 | 500 | 155 MB | 0,70 | 1,25 Gbit/s |
+
+La columna de CPU son núcleos enteros, no fracción de los 4 del VPS: estas cifras se midieron cuando el repetidor corría en un solo hilo, así que 0,70 era un núcleo al 70 % con los otros tres sin usar. Ahora reparte entre todos los núcleos y no copia el vídeo para cada espectador, así que son un techo pesimista.
 
 La RAM y la CPU sobran. El límite es la red: el VPS sube unos 200 Mbit/s, que da para unos 75 espectadores a 2,5 Mbit/s o unos 130 a 1,5 Mbit/s.

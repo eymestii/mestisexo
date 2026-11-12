@@ -1,4 +1,5 @@
 use crate::{Gate, Out, Pass, Shared, MAX_LAG};
+use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use std::sync::Arc;
@@ -120,7 +121,7 @@ async fn handle(stream: TcpStream, shared: Arc<Shared>) {
         }
         Ok(resp)
     };
-    let cfg = WebSocketConfig { max_message_size: Some(4096), max_frame_size: Some(4096), ..Default::default() };
+    let cfg = WebSocketConfig::default().max_message_size(Some(4096)).max_frame_size(Some(4096));
     let ws = tokio::time::timeout(
         Duration::from_secs(10),
         tokio_tungstenite::accept_hdr_async_with_config(stream, cb, Some(cfg)),
@@ -173,7 +174,7 @@ async fn handle(stream: TcpStream, shared: Arc<Shared>) {
     let frames = if is_host { Vec::new() } else { frames };
     for f in frames {
         if !ok { break; }
-        ok = send!(Message::binary(f.to_vec()));
+        ok = send!(Message::binary(f));
     }
 
     let mut last_msg = Instant::now() - MSG_INTERVAL;
@@ -188,13 +189,13 @@ async fn handle(stream: TcpStream, shared: Arc<Shared>) {
                 Ok(Out::Bin(..)) if is_host => {}
                 Ok(Out::Bin(b, at)) => match gate.pass(b[0], at.elapsed() > MAX_LAG) {
                     Pass::Skip => {}
-                    Pass::Send => ok = send!(Message::binary(b.to_vec())),
+                    Pass::Send => ok = send!(Message::binary(b)),
                     Pass::InitThenSend => {
                         let init = shared.lock().cache.init.clone();
                         if let Some(init) = init {
-                            ok = send!(Message::binary(init.to_vec()));
+                            ok = send!(Message::binary(init));
                         }
-                        if ok { ok = send!(Message::binary(b.to_vec())); }
+                        if ok { ok = send!(Message::binary(b)); }
                     }
                 },
                 Ok(Out::Kick) => break,
@@ -214,27 +215,27 @@ async fn handle(stream: TcpStream, shared: Arc<Shared>) {
                             }
                             In::Ping => {}
                             In::QualityHint { bandwidth, poor } if !is_host => {
-                                // Solo cuenta el cambio de estado: así el total
-                                // refleja cuántos van mal ahora, y no se queda
-                                // contando a quien tuvo un bache hace una hora.
-                                if poor != poor_now {
-                                    poor_now = poor;
-                                    let mut st = shared.lock();
-                                    if poor {
-                                        st.quality_stats.poor_now += 1;
-                                    } else {
-                                        st.quality_stats.poor_now =
-                                            st.quality_stats.poor_now.saturating_sub(1);
-                                    }
-                                }
                                 {
+                                    // Lock propio y sin vídeo detrás: cientos de
+                                    // espectadores pueden informar a la vez sin
+                                    // frenar el reparto de fragmentos.
+                                    let mut q = shared.quality();
+                                    // Solo cuenta el cambio de estado: así el total
+                                    // refleja cuántos van mal ahora, y no se queda
+                                    // contando a quien tuvo un bache hace una hora.
+                                    if poor != poor_now {
+                                        poor_now = poor;
+                                        if poor {
+                                            q.poor_now += 1;
+                                        } else {
+                                            q.poor_now = q.poor_now.saturating_sub(1);
+                                        }
+                                    }
                                     // Media móvil del ancho de banda de la audiencia.
-                                    let mut st = shared.lock();
-                                    let avg = &mut st.quality_stats.avg_bandwidth;
-                                    *avg = if *avg == 0.0 {
+                                    q.avg_bandwidth = if q.avg_bandwidth == 0.0 {
                                         bandwidth as f32
                                     } else {
-                                        0.3 * bandwidth as f32 + 0.7 * *avg
+                                        0.3 * bandwidth as f32 + 0.7 * q.avg_bandwidth
                                     };
                                 }
                                 // En el repetidor del VPS, el streamer es quien
@@ -254,17 +255,20 @@ async fn handle(stream: TcpStream, shared: Arc<Shared>) {
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
                 _ => {}
             },
-            _ = ping.tick() => ok = send!(Message::Ping(Vec::new())),
+            _ = ping.tick() => ok = send!(Message::Ping(Bytes::new())),
         }
     }
 
     if !is_host {
-        let mut st = shared.lock();
-        st.viewers = st.viewers.saturating_sub(1);
+        {
+            let mut st = shared.lock();
+            st.viewers = st.viewers.saturating_sub(1);
+        }
         // Quien se va deja de contar: si no, cerrar la pestaña con mala
         // conexión dejaría el contador alto para siempre.
         if poor_now {
-            st.quality_stats.poor_now = st.quality_stats.poor_now.saturating_sub(1);
+            let mut q = shared.quality();
+            q.poor_now = q.poor_now.saturating_sub(1);
         }
     }
     shared.viewers_changed();

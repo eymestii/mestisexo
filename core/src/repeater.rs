@@ -6,6 +6,7 @@
 //! un protocolo de tramas: `[tipo u8][longitud u32][datos]`.
 
 use crate::{now_ms, ws, ChatMsg, Out, Shared};
+use bytes::Bytes;
 use serde::Deserialize;
 use std::io;
 use std::net::SocketAddr;
@@ -167,7 +168,7 @@ async fn upstream_session(shared: &Arc<Shared>, stream: TcpStream) -> io::Result
         let (kind, data) = read_frame(&mut r).await?;
         match kind {
             T_MEDIA if hello_seen && !data.is_empty() => {
-                let f = Arc::new(data);
+                let f = Bytes::from(data);
                 let mut st = shared.lock();
                 st.cache.push(&f);
                 st.bytes_total += f.len() as u64;

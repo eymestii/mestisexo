@@ -27,7 +27,10 @@ fn main() {
         (None, None) => None,
         _ => usage("--auth-internal y --auth-url van juntos (la URL debe ser https://)"),
     };
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime");
+    // Multihilo: cada espectador es una tarea y el reparto se distribuye entre
+    // los núcleos del VPS. Con un solo hilo el techo era ~700 espectadores por
+    // mucho que el VPS tuviera 4 núcleos, porque tres quedaban sin usar.
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("runtime");
     if let Err(e) = rt.block_on(mestisexo_core::run_repeater(cfg)) {
         eprintln!("Error: {e}");
         std::process::exit(1);

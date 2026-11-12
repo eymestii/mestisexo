@@ -17,6 +17,7 @@ mod ws;
 pub use repeater::{run as run_repeater, Auth as RepeaterAuth, RepeaterConfig};
 pub use tunnel::Tunnel;
 
+use bytes::Bytes;
 use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -51,7 +52,8 @@ const MAX_GOP_FRAGS: usize = 40;
 pub(crate) enum Out {
     Text(Arc<str>),
     /// Momento en que se generó, para descartar lo que llega tarde a un espectador lento.
-    Bin(Arc<Vec<u8>>, Instant),
+    /// `Bytes` es contado por referencias: clonarlo para cada espectador no copia el vídeo.
+    Bin(Bytes, Instant),
     /// Cierra todas las conexiones de espectadores (la clave ha cambiado).
     Kick,
 }
@@ -72,12 +74,12 @@ pub(crate) struct ChatMsg {
 /// fragmentos desde el último keyframe. Nada más antiguo.
 #[derive(Default)]
 pub(crate) struct Cache {
-    pub init: Option<Arc<Vec<u8>>>,
-    pub gop: Vec<Arc<Vec<u8>>>,
+    pub init: Option<Bytes>,
+    pub gop: Vec<Bytes>,
 }
 
 impl Cache {
-    pub fn push(&mut self, b: &Arc<Vec<u8>>) {
+    pub fn push(&mut self, b: &Bytes) {
         match b.first() {
             Some(&INIT) => {
                 self.init = Some(b.clone());
@@ -98,7 +100,7 @@ impl Cache {
     }
 
     /// Init seguido del GOP actual.
-    pub fn frames(&self) -> Vec<Arc<Vec<u8>>> {
+    pub fn frames(&self) -> Vec<Bytes> {
         self.init.iter().chain(self.gop.iter()).cloned().collect()
     }
 }
@@ -171,8 +173,6 @@ pub(crate) struct State {
     pub bytes_total: u64,
     pub frags_total: u64,
     pub last_data_ms: u64,
-    /// Estadísticas de calidad de red de los espectadores
-    pub quality_stats: crate::ws::QualityStats,
 }
 
 impl State {
@@ -203,6 +203,10 @@ pub(crate) struct Shared {
     pub relay_mode: bool,
     pub tx: broadcast::Sender<Out>,
     pub state: Mutex<State>,
+    /// Aparte de `state` a propósito: cada espectador actualiza esto por su
+    /// cuenta cada 2 s, así que con el runtime multihilo mantenerlo en el lock
+    /// grande haría que cientos de tareas compitieran por él sin necesidad.
+    pub quality: Mutex<crate::ws::QualityStats>,
     /// En el repetidor, canal hacia el streamer mientras está conectado.
     pub upstream: Mutex<Option<mpsc::Sender<String>>>,
     /// En el repetidor, cuentas de Discord obligatorias para los espectadores.
@@ -218,6 +222,7 @@ impl Shared {
             relay_mode,
             tx,
             state: Mutex::new(State { key, status: status.into(), ..Default::default() }),
+            quality: Mutex::new(Default::default()),
             upstream: Mutex::new(None),
             auth,
         })
@@ -225,6 +230,10 @@ impl Shared {
 
     pub fn lock(&self) -> std::sync::MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn quality(&self) -> std::sync::MutexGuard<'_, crate::ws::QualityStats> {
+        self.quality.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn send_json(&self, v: serde_json::Value) {
@@ -340,6 +349,12 @@ impl Handle {
     }
 
     pub fn status(&self) -> Status {
+        // El lock de calidad se toma y se suelta antes del de estado: así nunca
+        // se mantienen los dos a la vez y no hay orden de bloqueo que respetar.
+        let (quality_poor_now, quality_avg_bandwidth) = {
+            let q = self.shared.quality();
+            (q.poor_now, q.avg_bandwidth)
+        };
         let st = self.shared.lock();
         Status {
             live: st.live(),
@@ -353,8 +368,8 @@ impl Handle {
             frags_total: st.frags_total,
             last_data_ms: st.last_data_ms,
             now_ms: now_ms(),
-            quality_poor_now: st.quality_stats.poor_now,
-            quality_avg_bandwidth: st.quality_stats.avg_bandwidth,
+            quality_poor_now,
+            quality_avg_bandwidth,
         }
     }
 
