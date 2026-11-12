@@ -1,4 +1,4 @@
-use crate::{Gate, Out, Pass, Shared, MAX_LAG};
+use crate::{Out, Shared};
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -14,9 +14,8 @@ use tokio_tungstenite::tungstenite::Message;
 pub(crate) const MAX_NAME: usize = 24;
 pub(crate) const MAX_TEXT: usize = 300;
 const MSG_INTERVAL: Duration = Duration::from_millis(700);
-/// Búfer de envío del sistema por conexión. Pequeño a propósito: con el valor
-/// por defecto (hasta varios MB) el sistema acumula segundos de vídeo para un
-/// espectador lento y se los entrega tarde; así el retraso se ve aquí y se descarta.
+/// Búfer de envío del sistema por conexión. Por aquí solo va chat, así que no
+/// hace falta margen: cuanto más pequeño, antes se nota un espectador atascado.
 pub(crate) const SEND_BUFFER: usize = 128 * 1024;
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -151,13 +150,13 @@ async fn handle(stream: TcpStream, shared: Arc<Shared>) {
     let (mut sink, mut source) = ws.split();
 
     // Suscribirse antes de copiar el estado para no perder nada entre medias.
-    let (mut rx, welcome, frames) = {
+    let (mut rx, welcome) = {
         let mut st = shared.lock();
         let rx = shared.tx.subscribe();
         if !is_host {
             st.viewers += 1;
         }
-        (rx, st.welcome(is_host), st.cache.frames())
+        (rx, st.welcome(is_host))
     };
     shared.viewers_changed();
 
@@ -170,36 +169,21 @@ async fn handle(stream: TcpStream, shared: Arc<Shared>) {
     }
 
     let mut ok = send!(Message::text(welcome.to_string()));
-    // La ventana del streamer solo muestra el chat: no se le manda vídeo.
-    let frames = if is_host { Vec::new() } else { frames };
-    for f in frames {
-        if !ok { break; }
-        ok = send!(Message::binary(f));
-    }
 
     let mut last_msg = Instant::now() - MSG_INTERVAL;
     let mut ping = tokio::time::interval(Duration::from_secs(20));
-    let mut gate = Gate::default();
     // Si este espectador está contado como «va mal» ahora mismo.
     let mut poor_now = false;
     while ok {
         tokio::select! {
             out = rx.recv() => match out {
                 Ok(Out::Text(t)) => ok = send!(Message::text(t.to_string())),
-                Ok(Out::Bin(..)) if is_host => {}
-                Ok(Out::Bin(b, at)) => match gate.pass(b[0], at.elapsed() > MAX_LAG) {
-                    Pass::Skip => {}
-                    Pass::Send => ok = send!(Message::binary(b)),
-                    Pass::InitThenSend => {
-                        let init = shared.lock().cache.init.clone();
-                        if let Some(init) = init {
-                            ok = send!(Message::binary(init));
-                        }
-                        if ok { ok = send!(Message::binary(b)); }
-                    }
-                },
+                // El vídeo viaja por este canal hacia el repetidor (tunnel.rs),
+                // no hacia los espectadores: aquí solo va el chat.
+                Ok(Out::Bin(..)) => {}
                 Ok(Out::Kick) => break,
-                Err(RecvError::Lagged(_)) => gate.lost(true),
+                // El chat no se puede recuperar: se avisa y se sigue.
+                Err(RecvError::Lagged(_)) => {}
                 Err(RecvError::Closed) => break,
             },
             msg = source.next() => match msg {

@@ -70,8 +70,9 @@ pub async fn run(shared: Arc<Shared>, ffmpeg: String, rtmp_url: String) {
         let was_live = {
             let mut st = shared.lock();
             st.live_since = None;
-            st.codec = None;
+            // El orden importa: `live()` mira `codec`, así que se consulta antes de borrarlo.
             let was = st.live();
+            st.codec = None;
             st.cache.clear();
             was
         };
@@ -150,12 +151,24 @@ async fn pump<R: AsyncRead + Unpin>(shared: &Shared, r: &mut R) -> io::Result<()
     }
 }
 
-fn be32(b: &[u8], i: usize) -> Option<u32> {
+pub(crate) fn be32(b: &[u8], i: usize) -> Option<u32> {
     b.get(i..i + 4).map(|s| u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
 }
 
+/// Caja MP4 que empieza en `i`: (tipo, caja completa con cabecera, inicio de
+/// la siguiente). Es la versión sobre un buffer en memoria de `read_box`, que
+/// lee del flujo de ffmpeg.
+pub(crate) fn box_at(b: &[u8], i: usize) -> Option<(&[u8], &[u8], usize)> {
+    let size = be32(b, i)? as usize;
+    let kind = b.get(i + 4..i + 8)?;
+    if size < 8 {
+        return None;
+    }
+    Some((kind, b.get(i..i + size)?, i + size))
+}
+
 /// Recorre las cajas hijas de `b` y devuelve (tipo, contenido sin cabecera).
-fn children(b: &[u8]) -> impl Iterator<Item = (&[u8], &[u8])> {
+pub(crate) fn children(b: &[u8]) -> impl Iterator<Item = (&[u8], &[u8])> {
     let mut i = 0;
     std::iter::from_fn(move || {
         let size = be32(b, i)? as usize;
@@ -168,7 +181,7 @@ fn children(b: &[u8]) -> impl Iterator<Item = (&[u8], &[u8])> {
 
 /// Indica si el primer sample de cada pista del `moof` es un keyframe, es
 /// decir, si el fragmento se puede decodificar sin los anteriores.
-fn starts_with_keyframe(moof: &[u8]) -> bool {
+pub(crate) fn starts_with_keyframe(moof: &[u8]) -> bool {
     const NON_SYNC: u32 = 0x0001_0000;
     let Some(body) = moof.get(8..) else { return false };
     let mut any = false;

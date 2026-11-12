@@ -6,6 +6,8 @@ Wants=network-online.target
 [Service]
 ExecStart=/usr/local/bin/mestisexo-auth
 EnvironmentFile=/etc/mestisexo/auth.env
+# Clave compartida con el repetidor para firmar el acceso al vídeo.
+EnvironmentFile=-/etc/mestisexo/hls.env
 Restart=always
 RestartSec=2
 DynamicUser=yes

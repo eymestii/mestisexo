@@ -4,7 +4,10 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/mestisexo-repeater --listen 127.0.0.1:8090 --upstream 127.0.0.1:8091 --max-viewers 500
+ExecStart=/usr/local/bin/mestisexo-repeater --listen 127.0.0.1:8090 --hls-listen 127.0.0.1:8094 --upstream 127.0.0.1:8091 --max-viewers 500
+# La clave que firma el acceso al vídeo, compartida con el servicio de
+# cuentas. Sin ella el vídeo queda accesible a quien tenga la URL.
+EnvironmentFile=-/etc/mestisexo/hls.env
 Restart=always
 RestartSec=2
 DynamicUser=yes

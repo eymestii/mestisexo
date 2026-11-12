@@ -30,6 +30,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const SESSION_TTL: u64 = 30 * 24 * 3600;
 const LOGIN_TTL: u64 = 600;
 const TICKET_TTL: u64 = 60;
+/// Validez del token que abre los ficheros de vídeo. Corto para que un enlace
+/// copiado no sirva mucho, y largo para que el reproductor no lo renueve a cada
+/// rato: la web lo pide de nuevo antes de que caduque.
+const VIDEO_TTL: u64 = 600;
 /// Cada cuánto se vuelve a comprobar con el bot que el usuario sigue en el servidor.
 const MEMBER_RECHECK: u64 = 3600;
 /// Si Discord no responde, se acepta una comprobación de hasta este tiempo.
@@ -60,6 +64,8 @@ struct Cfg {
     discord: Option<Discord>,
     dodo: Option<Dodo>,
     db_path: PathBuf,
+    /// Clave compartida con el repetidor para firmar el acceso al vídeo.
+    hls_secret: Option<Vec<u8>>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -422,6 +428,9 @@ async fn me(State(app): State<Shared>, headers: HeaderMap) -> Response {
     api(StatusCode::OK, json!({ "id": uid, "name": u.name, "sub": u.sub, "payments": app.cfg.dodo.is_some() }))
 }
 
+/// Permiso para entrar: el ticket de un solo uso abre el chat (lo canjea el
+/// repetidor) y el token firmado abre los ficheros de vídeo. Son distintos
+/// porque el vídeo son muchas peticiones y un ticket de un solo uso no vale.
 async fn ticket(State(app): State<Shared>, headers: HeaderMap) -> Response {
     let Some(uid) = app.user_of(&headers) else { return unauthorized() };
     if app.member(&uid).await.is_none() {
@@ -435,7 +444,9 @@ async fn ticket(State(app): State<Shared>, headers: HeaderMap) -> Response {
         }
         mem.tickets.insert(t.clone(), (uid, now() + TICKET_TTL));
     }
-    api(StatusCode::OK, json!({ "ticket": t }))
+    let exp = now() + VIDEO_TTL;
+    let video = app.cfg.hls_secret.as_deref().and_then(|s| mestisexo_core::sign_token(s, exp));
+    api(StatusCode::OK, json!({ "ticket": t, "video": video, "video_exp": exp }))
 }
 
 async fn logout(State(app): State<Shared>, headers: HeaderMap) -> Response {
@@ -662,7 +673,13 @@ fn load_cfg() -> Result<Cfg, String> {
         _ => None,
     };
     let dir = env("STATE_DIRECTORY").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
-    Ok(Cfg { public_url, discord, dodo, db_path: dir.join("auth.json") })
+    // La misma clave que recibe el repetidor en HLS_SECRET. Si falta, el vídeo
+    // no se firma y queda accesible a quien tenga la URL.
+    let hls_secret = match env("HLS_SECRET") {
+        Some(s) if s.len() < 32 => return Err("HLS_SECRET debe tener al menos 32 caracteres".into()),
+        s => s.map(String::into_bytes),
+    };
+    Ok(Cfg { public_url, discord, dodo, db_path: dir.join("auth.json"), hls_secret })
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -674,9 +691,10 @@ async fn main() {
     let listen = env("LISTEN").unwrap_or_else(|| "127.0.0.1:8092".into());
     let internal = env("INTERNAL_LISTEN").unwrap_or_else(|| "127.0.0.1:8093".into());
     eprintln!(
-        "Discord: {}. Pagos: {}.",
+        "Discord: {}. Pagos: {}. Vídeo firmado: {}.",
         if cfg.discord.is_some() { "configurado" } else { "sin configurar" },
-        match &cfg.dodo { Some(d) => d.base.as_str(), None => "sin configurar" }
+        match &cfg.dodo { Some(d) => d.base.as_str(), None => "sin configurar" },
+        if cfg.hls_secret.is_some() { "sí" } else { "no (HLS_SECRET sin definir)" }
     );
 
     let db: Db = std::fs::read(&cfg.db_path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();

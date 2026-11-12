@@ -1,6 +1,9 @@
 //! Repetidor para un VPS: recibe una sola copia de la señal del streamer y la
-//! reparte a todos los espectadores. Así la subida del streamer solo necesita
-//! el bitrate de OBS, tenga los espectadores que tenga.
+//! sirve a todos los espectadores. Así la subida del streamer solo necesita el
+//! bitrate de OBS, tenga los espectadores que tenga.
+//!
+//! El vídeo sale por el origen LL-HLS (`hls.rs`), en ficheros que un CDN puede
+//! cachear; el WebSocket lleva solo el chat, los espectadores y la calidad.
 //!
 //! El streamer llega por `ssh -W` al puerto de subida (solo loopback) y habla
 //! un protocolo de tramas: `[tipo u8][longitud u32][datos]`.
@@ -11,7 +14,7 @@ use serde::Deserialize;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, watch};
@@ -49,11 +52,17 @@ pub(crate) async fn read_frame<R: AsyncRead + Unpin>(r: &mut R) -> io::Result<(u
 pub struct RepeaterConfig {
     /// Dirección pública para los espectadores, p. ej. `127.0.0.1:8090` (detrás de Caddy).
     pub listen: SocketAddr,
+    /// Origen LL-HLS del que tiran los espectadores, p. ej. `127.0.0.1:8094`
+    /// (detrás de Caddy, y de un CDN si se pone uno delante).
+    pub hls_listen: SocketAddr,
     /// Dirección local donde llega el streamer por SSH, p. ej. `127.0.0.1:8091`.
     pub upstream: SocketAddr,
     pub max_viewers: usize,
     /// Si se indica, los espectadores tienen que iniciar sesión con Discord.
     pub auth: Option<Auth>,
+    /// Clave compartida con el servicio de cuentas para firmar el acceso al
+    /// vídeo. Sin ella, los segmentos son públicos para quien sepa la URL.
+    pub hls_secret: Option<Vec<u8>>,
 }
 
 /// Servicio de cuentas (`mestisexo-auth`) en el mismo VPS.
@@ -96,10 +105,17 @@ pub(crate) async fn redeem(addr: SocketAddr, ticket: &str) -> Option<Identity> {
 
 pub async fn run(cfg: RepeaterConfig) -> io::Result<()> {
     let public = TcpListener::bind(cfg.listen).await?;
+    let hls_l = TcpListener::bind(cfg.hls_listen).await?;
     let upstream = TcpListener::bind(cfg.upstream).await?;
-    let shared = Shared::new(String::new(), cfg.max_viewers, true, "Esperando al streamer…", cfg.auth.clone());
+    let hls = crate::hls::Hls::new(cfg.hls_secret);
+    let mut shared = Shared::new(String::new(), cfg.max_viewers, true, "Esperando al streamer…", cfg.auth.clone());
+    Arc::get_mut(&mut shared).expect("sin clones todavía").hls = Some(hls.clone());
     tokio::spawn(ws::serve(public, shared.clone()));
-    eprintln!("Repetidor: espectadores en {}, streamer en {}", cfg.listen, cfg.upstream);
+    tokio::spawn(crate::hls::serve(hls_l, hls));
+    eprintln!(
+        "Repetidor: chat en {}, vídeo en {}, streamer en {}",
+        cfg.listen, cfg.hls_listen, cfg.upstream
+    );
 
     // Solo un streamer a la vez: si entra uno nuevo (p. ej. tras un corte), sustituye al anterior.
     let mut current: Option<tokio::task::JoinHandle<()>> = None;
@@ -169,11 +185,17 @@ async fn upstream_session(shared: &Arc<Shared>, stream: TcpStream) -> io::Result
         match kind {
             T_MEDIA if hello_seen && !data.is_empty() => {
                 let f = Bytes::from(data);
+                // El vídeo ya no se reparte por WebSocket: entra en el
+                // empaquetador y los espectadores lo piden por HTTP, que es
+                // lo que un CDN puede cachear.
+                let started = shared.hls.as_ref().and_then(|h| h.push(&f));
                 let mut st = shared.lock();
-                st.cache.push(&f);
                 st.bytes_total += f.len() as u64;
                 st.last_data_ms = now_ms();
-                let _ = shared.tx.send(Out::Bin(f, Instant::now()));
+                if let Some(path) = started {
+                    st.hls = Some(path.clone());
+                    shared.send_json(serde_json::json!({ "t": "live", "hls": path }));
+                }
                 drop(st);
                 received += 1;
                 let _ = ack_tx.send(received);
@@ -207,12 +229,13 @@ fn on_hello(shared: &Shared, h: Hello) {
     st.key = h.key;
     st.chat = h.history.into_iter().collect();
     st.upstream_total = h.viewers;
-    st.cache.clear();
     st.codec = h.codec.filter(|_| h.live);
     st.status = "Streamer conectado".into();
-    // El init y el GOP actual llegan justo después como vídeo normal.
-    if let Some(codec) = &st.codec {
-        shared.send_json(serde_json::json!({ "t": "live", "codec": codec }));
+    // El init y el GOP actual llegan justo después como vídeo normal, y con
+    // ellos empieza una sesión HLS nueva: hasta entonces no hay nada que dar.
+    st.hls = None;
+    if let Some(hls) = &shared.hls {
+        hls.end();
     }
 }
 
@@ -229,19 +252,27 @@ fn on_event(shared: &Shared, v: &serde_json::Value, raw: &[u8]) {
         }
         Some("clear") => st.chat.clear(),
         Some("viewers") => st.upstream_total = v["n"].as_u64().map(|n| n as usize),
+        // El aviso de directo que importa a los espectadores es el que se
+        // manda al crear la sesión HLS, con su ruta. Este solo apunta el códec.
         Some("live") => {
             st.codec = v["codec"].as_str().map(String::from);
-            st.cache.clear();
+            return;
         }
         Some("offline") => {
             st.codec = None;
-            st.cache.clear();
+            st.hls = None;
+            if let Some(hls) = &shared.hls {
+                hls.end();
+            }
         }
         Some("end") => {
             st.codec = None;
-            st.cache.clear();
+            st.hls = None;
             st.chat.clear();
             st.key.clear();
+            if let Some(hls) = &shared.hls {
+                hls.end();
+            }
             let _ = shared.tx.send(Out::Text(String::from_utf8_lossy(raw).into()));
             let _ = shared.tx.send(Out::Kick);
             return;
@@ -259,7 +290,10 @@ fn upstream_gone(shared: &Shared) {
     st.status = "Esperando al streamer…".into();
     if st.live() {
         st.codec = None;
-        st.cache.clear();
+        st.hls = None;
+        if let Some(hls) = &shared.hls {
+            hls.end();
+        }
         // La clave y el chat se mantienen: si el streamer vuelve, se sigue igual.
         shared.send_json(serde_json::json!({ "t": "offline" }));
     }

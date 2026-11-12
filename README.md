@@ -3,16 +3,28 @@
 Streaming en tiempo real con chat, en tres piezas:
 
 - **Módulo del streamer** (Tauri 2 + Rust, solo Arch Linux): recibe la señal de OBS por RTMP y envía una sola copia al VPS por SSH.
-- **VPS**: el repetidor (`mestisexo-repeater`) reparte esa copia a todos los espectadores, el servicio de cuentas (`mestisexo-auth`) gestiona Discord y los pagos, y Caddy sirve todo por HTTPS.
+- **VPS**: el repetidor (`mestisexo-repeater`) convierte esa copia en LL-HLS y la sirve por HTTP, el servicio de cuentas (`mestisexo-auth`) gestiona Discord y los pagos, y Caddy sirve todo por HTTPS.
 - **Web para espectadores**: `https://109-123-252-126.sslip.io/`. Entra directo al directo y pide iniciar sesión con Discord (hay que ser miembro del servidor). Funciona en cualquier navegador, también en móviles (iPhone con iOS 17.1 o posterior), sin descargar nada.
 
 El chat se guarda solo en memoria (máximo 200 mensajes), se borra al terminar la sesión y nunca se escribe en disco.
 
+## Reparto del vídeo
+
+El vídeo se entrega en **LL-HLS**: el repetidor agrupa los fragmentos que le llegan en trozos de 0,25 s (partes) y segmentos de 2 s, y los publica en una playlist que el reproductor pide por HTTP. El chat sigue por WebSocket en `/ws`, y es independiente: si se cae el chat, el vídeo no se corta.
+
+La razón del cambio es la escala. Un trozo de vídeo tiene la misma URL para todos y no cambia nunca, así que se sirve con `Cache-Control: immutable` y cualquier CDN puesto delante del dominio lo entrega sin tocar el VPS. Solo la playlist va con `no-store`. Antes el vídeo salía por WebSocket y cada espectador obligaba al VPS a subir su propia copia, lo que ponía el techo en unos 75 espectadores por la subida del servidor.
+
+Cada señal nueva estrena un identificador aleatorio en la ruta (`/hls/<sesión>/live.m3u8`), así que nada cacheado de un directo anterior se puede confundir con el de ahora.
+
+El empaquetado lo hace el repetidor, no ffmpeg: el muxer HLS de ffmpeg (9.0.2) no sabe generar `EXT-X-PART` ni responder a recargas bloqueantes, que es justo lo que baja la latencia.
+
 ## Calidad de conexión del espectador
 
-La web mide el ancho de banda que recibe cada espectador (bytes por segundo del propio stream) y lo que le queda en el búfer. Si va justo aparece un aviso en su cabecera: «Conexión lenta» o «Conexión media». Con buena conexión no se muestra nada, porque no hay nada que el espectador pueda hacer al respecto. Es informativo: no cambia la calidad del vídeo, que es única para todos.
+La web mide, en el propio elemento de vídeo, cuántos segundos tiene por delante en el búfer y cuántas veces se le ha cortado. Si va justo aparece un aviso en su cabecera: «Conexión lenta» o «Conexión media». Con buena conexión no se muestra nada, porque no hay nada que el espectador pueda hacer al respecto. Es informativo: no cambia la calidad del vídeo, que es única para todos.
 
-Cuando un espectador baja de 1 Mbit/s su navegador avisa al repetidor, y vuelve a avisar en cuanto se recupera. El repetidor solo cuenta esos cambios de estado, así que lo que ve el streamer es cuántos espectadores van mal **ahora**, no cuántos tuvieron un bache en algún momento. Quien cierra la pestaña estando mal también se descuenta.
+No se cuentan bytes a mano, como se hacía con el WebSocket: los trozos los descarga el reproductor y pueden venir de la caché del navegador o del CDN sin pasar por el código de la página. En Chrome y Firefox, hls.js sí da una estimación del ancho de banda, que se muestra al pasar el ratón por el aviso; Safari no la expone.
+
+Cuando un espectador entra en estado «lenta» su navegador avisa al repetidor, y vuelve a avisar en cuanto se recupera. El repetidor solo cuenta esos cambios de estado, así que lo que ve el streamer es cuántos espectadores van mal **ahora**, no cuántos tuvieron un bache en algún momento. Quien cierra la pestaña estando mal también se descuenta.
 
 En la ventana del streamer aparece entonces una píldora con el porcentaje de la audiencia con problemas y, al pasar el ratón, el ancho de banda medio de quien ha informado. La píldora solo aparece si hay alguien con problemas. Si el porcentaje se mantiene alto, baja el bitrate en OBS: sin transcodificación es la única palanca.
 
@@ -20,11 +32,9 @@ En la ventana del streamer aparece entonces una píldora con el porcentaje de la
 
 Encima del vídeo no se dibuja nada: ni barra de progreso (en un directo no hay nada que buscar) ni controles. Un clic sobre el vídeo activa o silencia el sonido, y un doble clic abre la pantalla completa.
 
-El reproductor va un poco por detrás del directo para absorber los baches de la red, y cuánto va depende de la red de cada espectador. Arranca en 0,5 s. Cada vez que el navegador se queda sin datos (evento `waiting`) el margen sube medio segundo, hasta un tope de 3 s; tras un minuto sin un solo corte baja un cuarto de segundo cada 30 s, hasta volver a 0,5 s. El valor aprendido se guarda en `localStorage`, así que quien tiene mala conexión arranca con holgura en vez de descubrirla a base de cortes.
+Safari (macOS y iPhone) reproduce HLS por sí mismo, que gasta menos batería y da pantalla completa nativa. Chrome y Firefox no traen HLS, así que ahí se carga [hls.js](https://github.com/video-dev/hls.js) desde `ui/vendor/hls.min.js`. Va en el repositorio, con su checksum anotado en `ui/vendor/README.md`, para que la política de contenido siga siendo `'self'` y el directo no dependa de que un CDN de terceros responda.
 
-Sube rápido y baja despacio a propósito. Si subiera y bajara con la misma facilidad oscilaría, y a quien tiene una red regular le interesa más mantener el margen que recuperar medio segundo de cercanía al directo.
-
-Con buena conexión nada de esto se activa: el margen se queda en 0,5 s. Es el mismo canje que hacen las plataformas grandes, que van a unos 3 s del directo precisamente para no cortarse.
+La latencia queda en **1,5-2,5 s**, frente a los 0,5 s del reparto por WebSocket. Es el precio de que el vídeo sea cacheable. El margen por detrás del directo ya no lo lleva esta página: lo gobierna la playlist (`PART-HOLD-BACK`) y lo gestiona el reproductor, que se retrasa solo si la red de ese espectador no da y vuelve a acercarse cuando puede.
 
 ## Módulo del streamer (Arch Linux)
 
@@ -36,14 +46,14 @@ Depende de `webkit2gtk-4.1`, `gst-plugins-base`, `gst-plugins-good`, `gst-libav`
 
 1. Abre Mestisexo, rellena «VPS» (`stream@109.123.252.126`) y «Clave SSH» (`~/.ssh/mestisexo_tunnel`), y pulsa **Iniciar sesión**.
 2. En OBS: *Ajustes → Emisión → Servicio: Personalizado*. Pega el servidor y la clave de stream.
-   En *Salida* usa **x264/NVENC H.264, AAC, perfil main o high, intervalo de fotogramas clave 1 s**.
+   En *Salida* usa **x264/NVENC H.264, AAC, perfil main o high, intervalo de fotogramas clave 2 s**.
 3. Comparte el «Enlace para espectadores».
 
 Durante el directo, tu ventana muestra solo el chat y el estado (OBS, kbps, VPS). El vídeo no se te envía, así que tu PC no gasta en decodificarlo. Para ver cómo queda, abre el enlace en un navegador.
 
 ## VPS
 
-Tu PC envía **una sola copia** de la señal al VPS por SSH, y el repetidor la reparte a todos los espectadores. Tu subida solo necesita el bitrate de OBS, haya los espectadores que haya. Tu IP no queda expuesta.
+Tu PC envía **una sola copia** de la señal al VPS por SSH, y el repetidor la empaqueta en LL-HLS para todos los espectadores. Tu subida solo necesita el bitrate de OBS, haya los espectadores que haya. Tu IP no queda expuesta.
 
 Cada release incluye `mestisexo-vps-x86_64-linux.tar.gz` con los binarios estáticos, la carpeta `web/` y los ficheros de `deploy/`. En el VPS (como root):
 
@@ -55,6 +65,8 @@ install -D -m 644 10-discord.conf /etc/systemd/system/mestisexo-repeater.service
 install -m 644 50-mestisexo-stream.conf /etc/ssh/sshd_config.d/
 install -m 644 Caddyfile /etc/caddy/Caddyfile
 rm -rf /srv/mestisexo/web && mkdir -p /srv/mestisexo && cp -r web /srv/mestisexo/web
+# Clave que firma el acceso al vídeo. Solo la primera vez.
+mkdir -p /etc/mestisexo && umask 077 && printf 'HLS_SECRET=%s\n' "$(openssl rand -base64 48)" > /etc/mestisexo/hls.env
 systemctl daemon-reload && systemctl enable --now mestisexo-auth mestisexo-repeater
 sshd -t && systemctl reload ssh && systemctl reload caddy
 ufw allow 80/tcp && ufw allow 443/tcp
@@ -66,7 +78,7 @@ En `~stream/.ssh/authorized_keys`, la línea de la clave debe permitir solo la c
 restrict,port-forwarding,permitopen="127.0.0.1:8091" ssh-ed25519 AAAA… mestisexo
 ```
 
-Todo escucha solo en `127.0.0.1`: el repetidor en `8090` (espectadores, a través de Caddy en `/ws`) y `8091` (streamer, solo accesible por SSH), y el servicio de cuentas en `8092` (público, a través de Caddy) y `8093` (interno). Desde fuera solo están abiertos el 80 y el 443.
+Todo escucha solo en `127.0.0.1`: el repetidor en `8090` (chat, a través de Caddy en `/ws`), `8091` (streamer, solo accesible por SSH) y `8094` (vídeo LL-HLS, a través de Caddy en `/hls/*`), y el servicio de cuentas en `8092` (público, a través de Caddy) y `8093` (interno). Desde fuera solo están abiertos el 80 y el 443.
 
 ### Cuentas de Discord y suscripciones (VPS)
 
@@ -74,27 +86,29 @@ Con el servicio `mestisexo-auth`, solo pueden ver el stream los miembros de tu s
 
 - Caddy sirve `https://109-123-252-126.sslip.io` con un certificado de Let's Encrypt y lo reenvía a `127.0.0.1:8092`.
 - Los secretos solo están en el VPS, en `/etc/mestisexo/auth.env` (root, 600). La plantilla está en `deploy/auth.env.example`. Si una parte no tiene claves, queda desactivada.
-- La web inicia sesión con Discord, que devuelve un código a la propia página. La página solo lo acepta si coincide con el `state` que guardó antes de salir. Para cada conexión al stream pide un ticket de un solo uso, que el repetidor canjea por la red interna (`127.0.0.1:8093`).
-- La web vive en `/srv/mestisexo/web` (es la carpeta `ui/`). Caddy la sirve y reenvía `/ws` al repetidor, así que el vídeo va cifrado (wss).
+- La web inicia sesión con Discord, que devuelve un código a la propia página. La página solo lo acepta si coincide con el `state` que guardó antes de salir. Para cada conexión al chat pide un ticket de un solo uso, que el repetidor canjea por la red interna (`127.0.0.1:8093`).
+- El vídeo no puede usar ese ticket, porque el reproductor pide decenas de ficheros por minuto. En su lugar, la misma llamada devuelve un token firmado con HMAC-SHA256 y 10 minutos de validez, que el reproductor añade a la playlist y a los trozos. El repetidor lo valida con la clave compartida, sin consultar a nadie, y la web lo renueva antes de que caduque.
+- Esa clave está en `/etc/mestisexo/hls.env` (root, 600; plantilla en `deploy/hls.env.example`), en un fichero aparte para que el repetidor no vea las claves de Discord ni las de pagos. La leen los dos servicios como `HLS_SECRET`, nunca por la línea de órdenes. Mínimo 32 caracteres. Sin ella, el vídeo queda accesible a quien tenga la URL y el repetidor lo avisa al arrancar.
+- La web vive en `/srv/mestisexo/web` (es la carpeta `ui/`). Caddy la sirve, reenvía `/ws` al repetidor y `/hls/*` al origen de vídeo, así que todo va cifrado.
 
 ### Tiempo real
 
-- ffmpeg corta la señal en trozos de 0,25 s y los envía en cuanto salen, sin búfer de entrada.
-- Si un destino (el VPS o un espectador) lleva más de 1 s de retraso, se le descarta el vídeo atrasado y salta al siguiente fotograma clave. Nunca se le manda lo atrasado.
-- El reproductor va por detrás del último dato recibido lo que la red de cada espectador necesite: 0,5 s con buena conexión, hasta 3 s si se le corta (ver «Margen del reproductor»). Si pasa de 0,4 s sobre su objetivo acelera un 5 % hasta recuperarlo, y si pasa de 1 s sobre el objetivo salta al directo. La velocidad no cambia más de una vez cada 2 s a propósito: cada cambio obliga al navegador a reprocesar el audio, y hacerlo seguido lo corta.
-- Solo se guarda el último GOP (desde el último fotograma clave), para que quien entra vea imagen al momento.
-- En OBS usa **intervalo de fotogramas clave de 1 s** y el preset de baja latencia (x264: `tune=zerolatency`). Cuanto más corto el intervalo, antes se recupera el vídeo tras un corte.
+- ffmpeg corta la señal en trozos de 0,25 s y los envía en cuanto salen, sin búfer de entrada. Cada trozo es una parte (`EXT-X-PART`) de la playlist, y los que hay entre fotogramas clave forman un segmento de unos 2 s.
+- Si el VPS lleva más de 1 s de retraso respecto al PC del streamer, se le descarta el vídeo atrasado y salta al siguiente fotograma clave. Nunca se le manda lo atrasado.
+- La playlist anuncia `CAN-BLOCK-RELOAD=YES` y `EXT-X-PRELOAD-HINT`: el reproductor pide la parte siguiente antes de que exista y el repetidor le deja la petición abierta hasta que ffmpeg la entrega (como mucho 5 s), en vez de hacerle preguntar «¿ya está?» cada poco. Eso es lo que mantiene la latencia en 1,5-2,5 s. Caddy no limita esa espera por defecto.
+- Se mantienen los 6 últimos segmentos descargables, y las partes solo de los 3 últimos. Al terminar el directo, la sesión desaparece y lo cacheado deja de servirse.
+- En OBS usa **intervalo de fotogramas clave de 2 s** y el preset de baja latencia (x264: `tune=zerolatency`). Tiene que coincidir con la duración del segmento: con 1 s habría un segmento por segundo y el doble de peticiones sin ganar latencia.
 
 ## Seguridad
 
 - El RTMP solo escucha en `127.0.0.1`, así que OBS tiene que correr en el mismo equipo.
 - En la web, la cuenta de Discord es lo que da acceso: no hace falta clave. La clave de stream de OBS es fija entre sesiones y se puede cambiar con «Nueva».
-- Todo va cifrado: los espectadores por HTTPS/wss y el streamer por SSH.
-- Límites del chat: 300 caracteres por mensaje y un mensaje cada 0,7 s por persona. El repetidor admite 500 espectadores como máximo (`--max-viewers`).
+- Todo va cifrado: los espectadores por HTTPS (vídeo y web) y wss (chat), y el streamer por SSH.
+- Límites del chat: 300 caracteres por mensaje y un mensaje cada 0,7 s por persona. El repetidor admite 500 conexiones de chat como máximo (`--max-viewers`); el vídeo no tiene ese límite, porque lo sirve el origen HTTP.
 
 ### Capacidad del VPS
 
-Medido con el repetidor y Caddy reales y espectadores simulados por wss, a 2,5 Mbit/s:
+Con el vídeo por HTTP, el techo lo marca lo que el CDN no pueda absorber. Las cifras de abajo se midieron con el reparto por WebSocket, cuando el VPS subía una copia por espectador:
 
 | Espectadores | RAM (Caddy + repetidor) | CPU (núcleos) | Subida necesaria |
 |---|---|---|---|
@@ -102,6 +116,6 @@ Medido con el repetidor y Caddy reales y espectadores simulados por wss, a 2,5 M
 | 250 | 99 MB | 0,36 | 625 Mbit/s |
 | 500 | 155 MB | 0,70 | 1,25 Gbit/s |
 
-La columna de CPU son núcleos enteros, no fracción de los 4 del VPS: estas cifras se midieron cuando el repetidor corría en un solo hilo, así que 0,70 era un núcleo al 70 % con los otros tres sin usar. Ahora reparte entre todos los núcleos y no copia el vídeo para cada espectador, así que son un techo pesimista.
+La columna de CPU son núcleos enteros, no fracción de los 4 del VPS: se midió con el repetidor en un solo hilo, así que 0,70 era un núcleo al 70 % con los otros tres sin usar.
 
-La RAM y la CPU sobran. El límite es la red: el VPS sube unos 200 Mbit/s, que da para unos 75 espectadores a 2,5 Mbit/s o unos 130 a 1,5 Mbit/s.
+La RAM y la CPU sobraban; el límite era la red. El VPS sube unos 200 Mbit/s, que daba para unos 75 espectadores a 2,5 Mbit/s. Con LL-HLS, cada trozo se sirve una vez al CDN y el CDN lo reparte, así que esa subida deja de ser el techo. Sin CDN delante, el límite sigue siendo el mismo.

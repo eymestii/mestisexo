@@ -4,17 +4,35 @@
 	handle @public {
 		reverse_proxy 127.0.0.1:8092
 	}
-	# Versión web y apps móviles: el reproductor conecta aquí por wss://.
+	# Chat, espectadores y calidad. El vídeo ya no va por aquí.
 	handle /ws {
 		reverse_proxy 127.0.0.1:8090
 	}
+	# Vídeo en LL-HLS. El repetidor pone las cabeceras de caché: la playlist
+	# con no-store y los trozos como inmutables, así que un CDN delante de
+	# este dominio sirve casi todo sin tocar el VPS.
+	#
+	# La recarga bloqueante retiene la petición hasta que existe el trozo
+	# siguiente (como mucho 5 s). Caddy no limita esa espera por defecto; si
+	# alguna vez se pone response_header_timeout aquí, tiene que ser mayor.
+	handle /hls/* {
+		reverse_proxy 127.0.0.1:8094
+	}
 	handle {
 		root * /srv/mestisexo/web
+		# hls.js y la licencia no cambian nunca para una misma versión; el
+		# HTML sí, y la versión en la URL de app.js y style.css obliga a
+		# recargarlos cuando toca.
+		@assets path /vendor/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
 		header {
 			Cache-Control "no-cache"
 			Referrer-Policy "no-referrer"
 			X-Content-Type-Options "nosniff"
-			Content-Security-Policy "default-src 'self'; connect-src 'self' wss://109-123-252-126.sslip.io; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'"
+			# media-src 'self' porque el vídeo llega del mismo dominio por
+			# HTTP; blob: lo necesita hls.js, que alimenta el reproductor con
+			# MediaSource.
+			Content-Security-Policy "default-src 'self'; connect-src 'self' wss://109-123-252-126.sslip.io; media-src 'self' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'"
 		}
 		file_server
 	}

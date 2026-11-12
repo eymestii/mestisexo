@@ -2,18 +2,22 @@
 //!
 //! - Recibe la señal de OBS por RTMP (ffmpeg en modo `-listen`) y la remuxa a
 //!   MP4 fragmentado sin recodificar.
-//! - Reparte los fragmentos y el chat a los espectadores por WebSocket, o
-//!   envía una sola copia a un repetidor en un VPS que los reparte por él.
-//! - Prioriza el directo: a quien va con retraso se le descarta vídeo y se le
-//!   salta al último keyframe en vez de mandarle lo atrasado.
+//! - Envía una sola copia de los fragmentos al repetidor del VPS, que los
+//!   empaqueta en LL-HLS (`hls.rs`) para que los espectadores los pidan por
+//!   HTTP y un CDN pueda cachearlos.
+//! - Prioriza el directo: si el VPS va con retraso se le descarta vídeo y se
+//!   le salta al último keyframe en vez de mandarle lo atrasado.
+//! - El WebSocket lleva solo chat, espectadores y calidad.
 //! - El chat vive solo en memoria: se limita a `MAX_HISTORY` mensajes y se
 //!   borra al terminar la sesión.
 
+mod hls;
 mod repeater;
 mod tunnel;
 mod video;
 mod ws;
 
+pub use hls::sign_token;
 pub use repeater::{run as run_repeater, Auth as RepeaterAuth, RepeaterConfig};
 pub use tunnel::Tunnel;
 
@@ -41,8 +45,8 @@ pub(crate) const INIT: u8 = 0;
 pub(crate) const FRAG_KEY: u8 = 1;
 pub(crate) const FRAG_DELTA: u8 = 2;
 
-/// Retraso máximo de un fragmento en cada salto (PC → VPS → espectador) antes
-/// de descartarlo y saltar al directo.
+/// Retraso máximo de un fragmento en el salto PC → VPS antes de descartarlo y
+/// saltar al directo.
 pub(crate) const MAX_LAG: Duration = Duration::from_millis(1000);
 
 /// Tope de fragmentos guardados desde el último keyframe (≈10 s con fragmentos de 0,25 s).
@@ -51,8 +55,9 @@ const MAX_GOP_FRAGS: usize = 40;
 #[derive(Clone)]
 pub(crate) enum Out {
     Text(Arc<str>),
-    /// Momento en que se generó, para descartar lo que llega tarde a un espectador lento.
-    /// `Bytes` es contado por referencias: clonarlo para cada espectador no copia el vídeo.
+    /// Vídeo hacia el repetidor del VPS (`tunnel.rs`). Los espectadores ya no
+    /// lo reciben por aquí: lo piden por HTTP. `Instant` es el momento en que
+    /// se generó, para descartar lo que llegaría tarde si el enlace se atasca.
     Bin(Bytes, Instant),
     /// Cierra todas las conexiones de espectadores (la clave ha cambiado).
     Kick,
@@ -154,9 +159,14 @@ impl Gate {
 pub(crate) struct State {
     /// Clave que deben presentar los espectadores (en el repetidor la envía el streamer).
     pub key: String,
-    /// Códec MSE de la señal actual.
+    /// Códec MSE de la señal actual. `Some` equivale a estar en directo.
     pub codec: Option<String>,
+    /// Init y GOP actual. Solo en el streamer: es lo que se reenvía al
+    /// repetidor cuando el enlace se recupera, para que pueda empezar una
+    /// sesión HLS nueva sin esperar al siguiente keyframe de OBS.
     pub cache: Cache,
+    /// En el repetidor, ruta de la playlist de la señal actual.
+    pub hls: Option<String>,
     pub chat: VecDeque<ChatMsg>,
     pub next_id: u64,
     /// Espectadores conectados directamente a este proceso.
@@ -177,7 +187,7 @@ pub(crate) struct State {
 
 impl State {
     pub fn live(&self) -> bool {
-        self.cache.init.is_some()
+        self.codec.is_some()
     }
 
     pub fn total_viewers(&self) -> usize {
@@ -189,7 +199,7 @@ impl State {
             "t": "welcome",
             "history": &self.chat,
             "live": self.live(),
-            "codec": self.codec,
+            "hls": self.hls,
             "viewers": self.total_viewers(),
             "host": host,
         })
@@ -211,6 +221,8 @@ pub(crate) struct Shared {
     pub upstream: Mutex<Option<mpsc::Sender<String>>>,
     /// En el repetidor, cuentas de Discord obligatorias para los espectadores.
     pub auth: Option<repeater::Auth>,
+    /// En el repetidor, origen LL-HLS del que tiran los espectadores.
+    pub hls: Option<Arc<hls::Hls>>,
 }
 
 impl Shared {
@@ -225,6 +237,7 @@ impl Shared {
             quality: Mutex::new(Default::default()),
             upstream: Mutex::new(None),
             auth,
+            hls: None,
         })
     }
 
@@ -285,6 +298,50 @@ impl Shared {
 
 pub(crate) fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+/// Acceso al empaquetado y a la firma para las pruebas. No forma parte de la
+/// interfaz del servidor: solo existe para poder comprobar el empaquetado
+/// contra vídeo real de ffmpeg.
+#[doc(hidden)]
+pub mod testing {
+    pub use crate::hls::{token_ok, Packager};
+
+    pub const INIT: u8 = crate::INIT;
+    pub const FRAG_KEY: u8 = crate::FRAG_KEY;
+    pub const FRAG_DELTA: u8 = crate::FRAG_DELTA;
+
+    /// Parte un MP4 fragmentado en los mismos mensajes que produce `video.rs`:
+    /// (tipo, datos sin el byte de tipo).
+    pub fn split_frames(mp4: &[u8]) -> Vec<(u8, Vec<u8>)> {
+        let mut out = Vec::new();
+        let mut init: Vec<u8> = Vec::new();
+        let mut frag: Vec<u8> = Vec::new();
+        let mut i = 0;
+        while let Some((kind, body, next)) = crate::video::box_at(mp4, i) {
+            match kind {
+                b"ftyp" => init = body.to_vec(),
+                b"moov" => {
+                    init.extend_from_slice(body);
+                    out.push((INIT, std::mem::take(&mut init)));
+                }
+                b"moof" => {
+                    frag = body.to_vec();
+                    out.push((if crate::video::starts_with_keyframe(body) { FRAG_KEY } else { FRAG_DELTA }, Vec::new()));
+                }
+                b"mdat" if !frag.is_empty() => {
+                    frag.extend_from_slice(body);
+                    if let Some(last) = out.last_mut() {
+                        last.1 = std::mem::take(&mut frag);
+                    }
+                }
+                _ => {}
+            }
+            i = next;
+        }
+        out.retain(|(_, d)| !d.is_empty());
+        out
+    }
 }
 
 pub fn random_token(len: usize) -> String {
