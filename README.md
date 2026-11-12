@@ -1,6 +1,18 @@
 # Mestisexo
 
-App de escritorio para hacer streaming sin depender de servidores externos (Tauri 2 + Rust, con HTML/JS sin frameworks en la interfaz).
+App para hacer streaming sin depender de servidores externos (Tauri 2 + Rust, con HTML/JS sin frameworks en la interfaz).
+
+| Plataforma | Descarga | Modos |
+|---|---|---|
+| Windows | `.exe` | Transmitir y ver |
+| Linux | `.AppImage` (cualquier distro), `.deb` (Debian/Ubuntu), `.rpm` (Fedora/openSUSE) | Transmitir y ver |
+| macOS 11+ (Intel y Apple Silicon) | `.dmg` | Transmitir y ver |
+| Android 7+ | `.apk` | Ver |
+| iPhone/iPad (iOS 17.1+) y cualquier navegador | `https://109-123-252-126.sslip.io` | Ver |
+
+La app de macOS no está firmada por Apple. La primera vez, haz clic derecho sobre la app → **Abrir** → **Abrir**. Si dice que «está dañada», ejecuta `xattr -cr /Applications/Mestisexo.app`.
+
+En iPhone, abre el enlace en Safari y pulsa **Compartir → Añadir a pantalla de inicio**: queda como una app más, sin descargar nada. La app de Android carga esa misma web, así que los cambios en la interfaz le llegan sin actualizar.
 
 - **Transmitir**: OBS envía la señal por RTMP a la app, que la reparte por WebSocket sin recodificar, directamente o a través de un repetidor en un VPS.
 - **Ver**: otra persona con la app abre el código del stream y ve el vídeo y el chat.
@@ -15,7 +27,8 @@ App de escritorio para hacer streaming sin depender de servidores externos (Taur
 
 ```sh
 cargo build --release -p mestisexo      # binario: target/release/mestisexo
-cargo install tauri-cli && cd app && cargo tauri build   # instaladores (.deb, AppImage, .exe)
+cargo install tauri-cli && cd app && cargo tauri build   # instaladores de escritorio
+cd app && cargo tauri android build --apk                # Android (ANDROID_HOME y NDK_HOME)
 ```
 
 ## Uso
@@ -65,6 +78,7 @@ Con el servicio `mestisexo-auth`, solo pueden ver el stream los miembros de tu s
 - Caddy sirve `https://109-123-252-126.sslip.io` con un certificado de Let's Encrypt y lo reenvía a `127.0.0.1:8092`.
 - Los secretos solo están en el VPS, en `/etc/mestisexo/auth.env` (root, 600). La plantilla está en `deploy/auth.env.example`. Si una parte no tiene claves, queda desactivada.
 - La app inicia sesión en el navegador del sistema y recibe un código en un puerto local. Para cada conexión al stream pide un ticket de un solo uso, que el repetidor canjea por la red interna (`127.0.0.1:8093`).
+- La versión web vive en `/srv/mestisexo/web` (es la carpeta `ui/`, también incluida como `web/` en el tarball de la release). Caddy la sirve y reenvía `/ws` al repetidor. Así el vídeo va cifrado (wss) y funciona en navegadores y móviles. En la web, Discord devuelve el código a la propia página, que solo lo acepta si coincide el `state` que guardó.
 - Para exigir la cuenta en el repetidor: `install -D -m 644 deploy/10-discord.conf /etc/systemd/system/mestisexo-repeater.service.d/10-discord.conf && systemctl daemon-reload && systemctl restart mestisexo-repeater`.
 
 ### Tiempo real
@@ -80,4 +94,16 @@ Con el servicio `mestisexo-auth`, solo pueden ver el stream los miembros de tu s
 - El RTMP solo escucha en `127.0.0.1`, así que OBS tiene que correr en el mismo equipo.
 - Sin la clave del código no se puede conectar. Las claves son nuevas en cada sesión.
 - El tráfico no va cifrado. Para cifrarlo, usa la VPN.
-- Límites del chat: 300 caracteres por mensaje, un mensaje cada 0,7 s por persona y 100 espectadores como máximo.
+- Límites del chat: 300 caracteres por mensaje y un mensaje cada 0,7 s por persona. El repetidor admite 500 espectadores como máximo (`--max-viewers`).
+
+### Capacidad del VPS
+
+Medido con el repetidor y Caddy reales y espectadores simulados por wss, a 2,5 Mbit/s:
+
+| Espectadores | RAM (Caddy + repetidor) | CPU (de 4 núcleos) | Subida necesaria |
+|---|---|---|---|
+| 100 | 62 MB | 0,14 | 250 Mbit/s |
+| 250 | 99 MB | 0,36 | 625 Mbit/s |
+| 500 | 155 MB | 0,70 | 1,25 Gbit/s |
+
+La RAM y la CPU sobran. El límite es la red: el VPS sube unos 200 Mbit/s, que da para unos 75 espectadores a 2,5 Mbit/s o unos 130 a 1,5 Mbit/s.

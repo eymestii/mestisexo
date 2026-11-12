@@ -78,3 +78,15 @@ header #layout { margin-right: auto; }
 .account button { padding: 4px 10px; font-size: 12px; }
 .login-link { display: flex; gap: 8px; align-items: center; max-width: 100%; }
 .login-link code { background: var(--panel); padding: 6px 8px; border-radius: 4px; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 420px; user-select: all; }
+
+/* Móviles: márgenes de la muesca, cabecera que no desborda y textos legibles. */
+body.web #live { height: 100dvh; padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); }
+body.web #chat-form { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+@media (max-width: 760px) {
+  header { gap: 8px; overflow-x: auto; }
+  header #viewers { white-space: nowrap; }
+  .screen { margin: 6vh auto; }
+  .cards { grid-template-columns: 1fr; }
+  input { font-size: 16px; }
+  .login-link code { max-width: 60vw; }
+}

@@ -90,7 +90,7 @@ struct Session {
 
 #[derive(Default)]
 struct Mem {
-    /// `state` de OAuth → (puerto local de la app, `state` de la app, caducidad).
+    /// `state` de OAuth → (puerto local de la app o 0 si es la web, `state` de la app, caducidad).
     logins: HashMap<String, (u16, String, u64)>,
     /// Código de un solo uso → (token de sesión, caducidad).
     codes: HashMap<String, (String, u64)>,
@@ -272,9 +272,14 @@ fn api(status: StatusCode, v: Value) -> Response {
 /// La app escucha en `127.0.0.1:port` y recibe ahí el resultado (RFC 8252).
 /// Así, aunque alguien envíe a otro un enlace de inicio de sesión preparado,
 /// el código acaba en el PC de quien inicia sesión y no en el de quien lo envió.
+/// Con `web=1` (versión web) el resultado vuelve a la página principal, que
+/// solo lo acepta si el `state` coincide con el que guardó esa pestaña.
 #[derive(Deserialize)]
 struct LoginQuery {
+    #[serde(default)]
     port: u16,
+    /// `web=1`.
+    web: Option<String>,
     state: String,
 }
 
@@ -282,7 +287,8 @@ async fn login(State(app): State<Shared>, Query(q): Query<LoginQuery>) -> Respon
     let Some(d) = &app.cfg.discord else {
         return page("No disponible", "<p>El inicio de sesión con Discord aún no está configurado.</p>").into_response();
     };
-    if !valid_token(&q.state) || q.port < 1024 {
+    let web = q.web.as_deref() == Some("1");
+    if !valid_token(&q.state) || (q.port < 1024 && !web) {
         return (StatusCode::BAD_REQUEST, page("Enlace inválido", "<p>Vuelve a la app e inténtalo de nuevo.</p>")).into_response();
     }
     let state = token(32);
@@ -291,7 +297,7 @@ async fn login(State(app): State<Shared>, Query(q): Query<LoginQuery>) -> Respon
         if mem.logins.len() >= MAX_PENDING {
             return (StatusCode::SERVICE_UNAVAILABLE, page("Ocupado", "<p>Inténtalo dentro de unos minutos.</p>")).into_response();
         }
-        mem.logins.insert(state.clone(), (q.port, q.state, now() + LOGIN_TTL));
+        mem.logins.insert(state.clone(), (if web { 0 } else { q.port }, q.state, now() + LOGIN_TTL));
     }
     let url = reqwest::Url::parse_with_params(
         "https://discord.com/oauth2/authorize",
@@ -357,6 +363,9 @@ async fn callback(State(app): State<Shared>, Query(q): Query<Callback>) -> Respo
     }
     let one_time = token(32);
     app.mem().codes.insert(one_time.clone(), (session, now() + TICKET_TTL * 5));
+    if port == 0 {
+        return Redirect::to(&format!("{}/?code={one_time}&state={app_state}", app.cfg.public_url)).into_response();
+    }
     Redirect::to(&format!("http://127.0.0.1:{port}/done?code={one_time}&state={app_state}")).into_response()
 }
 
@@ -489,7 +498,7 @@ async fn checkout(State(app): State<Shared>, headers: HeaderMap) -> Response {
 }
 
 async fn paid() -> Html<String> {
-    page("Gracias", "<p>Si el pago se completó, tu insignia de suscriptor aparecerá en la app en unos segundos. Ya puedes cerrar esta pestaña.</p>")
+    page("Gracias", "<p>Si el pago se completó, tu insignia de suscriptor aparecerá en la app en unos segundos. Ya puedes cerrar esta pestaña.</p><p><a href=\"/\">Volver al directo</a></p>")
 }
 
 /// La app hace las peticiones desde su webview (otro origen). No se usan

@@ -2,8 +2,16 @@
 <html lang="es">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0e0e10">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="Mestisexo">
   <title>Mestisexo</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon-192.png">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -28,6 +36,7 @@
       <p class="muted">Son fijas entre sesiones. Si generas una nueva, la anterior deja de funcionar.</p>
       <div><span>Servidor (OBS)</span><code id="k-rtmp"></code><button data-copy="k-rtmp">Copiar</button></div>
       <div><span>Código para espectadores</span><code id="k-code"></code><button data-copy="k-code">Copiar</button></div>
+      <div id="k-web-row" class="hidden"><span>Enlace web (móvil y navegador)</span><code id="k-web"></code><button data-copy="k-web">Copiar</button></div>
     </div>
     <div class="row">
       <button class="back">Volver</button>

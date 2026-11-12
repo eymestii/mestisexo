@@ -1,6 +1,11 @@
 "use strict";
 
-const invoke = window.__TAURI__.core.invoke;
+// Sin Tauri (versión web y apps móviles) solo existe el modo espectador y se
+// conecta directo al repetidor del VPS en /ws.
+// Las apps móviles cargan la web del VPS: ahí también puede existir __TAURI__,
+// así que se mira el origen de la página.
+const native = !!window.__TAURI__ && (location.protocol === "tauri:" || location.hostname === "tauri.localhost");
+const invoke = native ? window.__TAURI__.core.invoke : () => Promise.reject(new Error("No disponible en la versión web"));
 const $ = (id) => document.getElementById(id);
 const MAX_LINES = 200;
 // Segundos por detrás del directo: objetivo, y a partir de cuánto se salta.
@@ -26,12 +31,20 @@ const player = {
     this.destroy();
     this.codec = codec;
     const type = `video/mp4; codecs="${codec}"`;
-    if (!window.MediaSource || !MediaSource.isTypeSupported(type)) {
-      setPlaceholder(`El reproductor no soporta ${codec}. Usa H.264 + AAC en OBS.`);
+    // En iPhone solo existe ManagedMediaSource (iOS 17.1+).
+    const MS = window.ManagedMediaSource || window.MediaSource;
+    if (!MS || !MS.isTypeSupported(type)) {
+      setPlaceholder(window.MediaSource || window.ManagedMediaSource
+        ? `El reproductor no soporta ${codec}. Usa H.264 + AAC en OBS.`
+        : "Este navegador no puede reproducir el directo. Actualiza a iOS 17.1 o posterior, o usa otro navegador.");
       return;
     }
-    this.ms = new MediaSource();
-    $("video").src = URL.createObjectURL(this.ms);
+    this.ms = new MS();
+    const v = $("video");
+    // ManagedMediaSource exige desactivar AirPlay si no hay fuente alternativa.
+    v.disableRemotePlayback = true;
+    this.url = URL.createObjectURL(this.ms);
+    v.src = this.url;
     this.ms.addEventListener("sourceopen", () => {
       this.sb = this.ms.addSourceBuffer(type);
       this.sb.mode = "segments";
@@ -83,7 +96,16 @@ const player = {
     catch (e) {
       if (e.name === "QuotaExceededError" && sb.buffered.length) sb.remove(0, v.currentTime - 2);
     }
-    if (v.paused) v.play().catch(() => {});
+    if (v.paused && !this.starting) {
+      // Sin un toque del usuario, móviles y Safari solo reproducen sin sonido.
+      this.starting = true;
+      v.play().catch(() => {
+        if (v.muted) return;
+        v.muted = true;
+        sysLine("El navegador empezó el vídeo sin sonido: actívalo con el botón de volumen.");
+        return v.play().catch(() => {});
+      }).finally(() => { this.starting = false; });
+    }
   },
 
   destroy() {
@@ -91,6 +113,7 @@ const player = {
     this.queue = []; this.sb = null; this.codec = null; this.waitKey = false;
     const v = $("video");
     if (this.ms) { v.removeAttribute("src"); v.load(); this.ms = null; }
+    if (this.url) { URL.revokeObjectURL(this.url); this.url = null; }
   },
 };
 
@@ -230,7 +253,7 @@ async function leave() {
   if (mode === "host") await invoke("stop_stream").catch(() => {});
   if (mode === "viewer") await invoke("disconnect_viewer").catch(() => {});
   mode = null;
-  show("home");
+  show(native ? "home" : "view-setup");
 }
 
 // ---------- Streamer ----------
@@ -297,26 +320,37 @@ $("clear").addEventListener("click", () => invoke("clear_chat"));
 
 // ---------- Espectador ----------
 
-$("join").addEventListener("click", async () => {
+$("join").addEventListener("click", join);
+
+async function join() {
   $("view-error").textContent = "";
-  const [addr, key] = $("code").value.trim().split("#");
-  if (!addr || !key) { $("view-error").textContent = "El código debe tener el formato ip:puerto#clave"; return; }
+  const code = $("code").value.trim();
   localStorage.setItem("name", $("name").value);
+  const n = encodeURIComponent($("name").value.trim());
   try {
-    const port = await invoke("connect_viewer", { addr });
+    if (native) {
+      const [addr, key] = code.split("#");
+      if (!addr || !key) { $("view-error").textContent = "El código debe tener el formato ip:puerto#clave"; return; }
+      const port = await invoke("connect_viewer", { addr });
+      viewerBase = `ws://127.0.0.1:${port}/?k=${encodeURIComponent(key)}&n=${n}`;
+    } else {
+      // Vale la clave sola, el código ip:puerto#clave o el enlace web.
+      const key = code.split("#").pop();
+      if (!/^[A-Za-z0-9]{1,64}$/.test(key)) { $("view-error").textContent = "Pega el enlace o la clave del stream."; return; }
+      localStorage.setItem("web-key", key);
+      viewerBase = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws?k=${key}&n=${n}`;
+    }
     mode = "viewer";
     $("clear").classList.add("hidden");
     $("health").classList.add("hidden");
     $("uptime").classList.add("hidden");
     show("live");
-    const n = encodeURIComponent($("name").value.trim());
-    viewerBase = `ws://127.0.0.1:${port}/?k=${encodeURIComponent(key)}&n=${n}`;
     authUrl = null;
     connect(viewerUrl);
   } catch (e) {
     $("view-error").textContent = String(e);
   }
-});
+}
 
 // ---------- Cuentas de Discord y suscripción ----------
 // Si el repetidor exige cuenta, responde {t:"auth", url} y cierra. La app
@@ -381,7 +415,38 @@ function authNeeded(e) {
 // Cada clic empieza un inicio de sesión nuevo; el resultado de uno anterior se ignora.
 let loginSeq = 0;
 
+function randomState() {
+  const abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  return Array.from(crypto.getRandomValues(new Uint8Array(32)), (b) => abc[b % abc.length]).join("");
+}
+
+async function exchangeCode(code) {
+  const r = await fetch(`${authUrl}/api/exchange?code=${encodeURIComponent(code)}`, { method: "POST" });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok || !body.token) throw new Error("No se pudo completar el inicio de sesión.");
+  localStorage.setItem(tokenKey(), body.token);
+}
+
+// En la web, Discord vuelve a esta misma página con ?code=…&state=….
+async function finishWebLogin() {
+  const q = new URLSearchParams(location.search);
+  if (!q.has("code")) return;
+  const expected = localStorage.getItem("login-state");
+  localStorage.removeItem("login-state");
+  history.replaceState(null, "", location.pathname + location.hash);
+  if (!expected || q.get("state") !== expected) return;
+  authUrl = location.origin;
+  try { await exchangeCode(q.get("code")); }
+  catch (e) { $("view-error").textContent = String(e.message || e); }
+}
+
 $("login-discord").addEventListener("click", async () => {
+  if (!native) {
+    const state = randomState();
+    localStorage.setItem("login-state", state);
+    location.href = `${authUrl}/login?web=1&state=${state}`;
+    return;
+  }
   const seq = ++loginSeq;
   $("login-link").classList.add("hidden");
   $("login-msg").textContent = "Abriendo el navegador…";
@@ -395,10 +460,7 @@ $("login-discord").addEventListener("click", async () => {
       : "Termina el inicio de sesión en el navegador. Si no se abrió, copia el enlace.";
     const code = await invoke("discord_login_wait");
     if (seq !== loginSeq) return;
-    const r = await fetch(`${authUrl}/api/exchange?code=${encodeURIComponent(code)}`, { method: "POST" });
-    const body = await r.json().catch(() => ({}));
-    if (!r.ok || !body.token) throw new Error("No se pudo completar el inicio de sesión.");
-    localStorage.setItem(tokenKey(), body.token);
+    await exchangeCode(code);
     $("login-panel").classList.add("hidden");
     $("login-link").classList.add("hidden");
     connect(viewerUrl);
@@ -415,8 +477,17 @@ $("login-copy").addEventListener("click", () => {
 
 $("login-invite").addEventListener("click", () => {
   const url = $("login-invite").dataset.url;
-  if (url) invoke("open_url", { url }).catch(() => {});
+  if (url) openUrl(url).catch(() => {});
 });
+
+// En la web se abre en otra pestaña; si el navegador no deja (apps móviles),
+// en esta misma.
+async function openUrl(url) {
+  if (native) return invoke("open_url", { url });
+  const w = window.open(url, "_blank");
+  if (w) w.opener = null;
+  else location.href = url;
+}
 
 function renderAccount() {
   const show = !!account;
@@ -430,7 +501,7 @@ function renderAccount() {
 $("subscribe").addEventListener("click", async () => {
   try {
     const { url } = await authApi("/api/checkout", "POST");
-    await invoke("open_url", { url });
+    await openUrl(url);
     sysLine("Completa el pago en el navegador. La insignia aparecerá al confirmarse.");
     // Al confirmarse el pago, reconectar para entrar con la insignia.
     clearInterval(subTimer);
@@ -473,6 +544,10 @@ function showKeys(k) {
   const vps = $("vps").value.trim();
   const host = vps ? vps.split("@").pop() : "TU_IP";
   $("k-code").textContent = `${host}:${Number($("ws-port").value)}#${k.viewer_key}`;
+  // La versión web vive en el VPS, con el certificado de <ip-con-guiones>.sslip.io.
+  const web = /^\d+\.\d+\.\d+\.\d+$/.test(host) ? `${host.replace(/\./g, "-")}.sslip.io` : vps ? host : null;
+  $("k-web-row").classList.toggle("hidden", !web);
+  $("k-web").textContent = web ? `https://${web}/#${k.viewer_key}` : "";
 }
 
 for (const id of ["vps", "ws-port", "rtmp-port"])
@@ -510,3 +585,13 @@ document.querySelectorAll("[data-copy]").forEach((b) =>
 $("name").value = localStorage.getItem("name") || "";
 $("vps").value = localStorage.getItem("vps") ?? "stream@109.123.252.126";
 $("vps-key").value = localStorage.getItem("vps-key") ?? "~/.ssh/mestisexo_tunnel";
+
+if (!native) {
+  document.body.classList.add("web");
+  $("go-host").classList.add("hidden");
+  document.querySelectorAll("#view-setup .back").forEach((b) => b.classList.add("hidden"));
+  $("code").placeholder = "Enlace o clave del stream";
+  $("code").value = location.hash.slice(1) || localStorage.getItem("web-key") || "";
+  show("view-setup");
+  finishWebLogin().then(() => { if ($("code").value) join(); });
+}
