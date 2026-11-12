@@ -166,14 +166,6 @@ async fn stream_status(app: State<'_, App>) -> Result<Option<core::Status>, Stri
     Ok(app.session.lock().await.as_ref().map(|h| h.status()))
 }
 
-#[tauri::command]
-async fn clear_chat(app: State<'_, App>) -> Result<(), String> {
-    if let Some(h) = app.session.lock().await.as_ref() {
-        h.clear_chat();
-    }
-    Ok(())
-}
-
 fn main() {
     // WebKitGTK con NVIDIA suele dejar la ventana en blanco con el renderizador DMA-BUF.
     #[cfg(target_os = "linux")]
@@ -187,8 +179,7 @@ fn main() {
             get_keys,
             regenerate_keys,
             stop_stream,
-            stream_status,
-            clear_chat
+            stream_status
         ])
         .on_window_event(|w, e| {
             if let tauri::WindowEvent::Destroyed = e {

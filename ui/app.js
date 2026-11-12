@@ -17,7 +17,7 @@ let reconnectTimer = null;
 let wsUrl = null;
 
 function show(id) {
-  for (const s of ["host-setup", "view-setup", "live"]) $(s).classList.toggle("hidden", s !== id);
+  for (const s of ["host-setup", "live"]) $(s).classList.toggle("hidden", s !== id);
 }
 
 // ---------- Reproductor (MediaSource con MP4 fragmentado) ----------
@@ -252,7 +252,8 @@ async function leave() {
   if (mode === "host") await invoke("stop_stream").catch(() => {});
   mode = null;
   $("live").classList.remove("host");
-  show(native ? "host-setup" : "view-setup");
+  $("leave").classList.add("hidden");
+  show("host-setup");
 }
 
 // ---------- Streamer ----------
@@ -300,7 +301,7 @@ $("start").addEventListener("click", async () => {
     });
     mode = "host";
     $("live").classList.add("host");
-    $("clear").classList.remove("hidden");
+    $("leave").classList.remove("hidden");
     $("health").classList.remove("hidden");
     show("live");
     connect(`ws://127.0.0.1:${s.ws_port}/?k=${s.key}&h=${s.host_token}`);
@@ -316,33 +317,17 @@ $("start").addEventListener("click", async () => {
   }
 });
 
-$("clear").addEventListener("click", () => invoke("clear_chat"));
+// ---------- Espectador (web) ----------
+// Se entra directo al directo: el nombre sale de la cuenta de Discord y el
+// repetidor pide iniciar sesión si hace falta.
 
-// ---------- Espectador ----------
-
-$("join").addEventListener("click", join);
-
-async function join() {
-  $("view-error").textContent = "";
-  const code = $("code").value.trim();
-  localStorage.setItem("name", $("name").value);
-  const n = encodeURIComponent($("name").value.trim());
-  // Vale la clave sola o el enlace completo.
-  const key = code.split("#").pop();
-  if (!/^[A-Za-z0-9]{1,64}$/.test(key)) { $("view-error").textContent = "Pega el enlace o la clave del stream."; return; }
-  localStorage.setItem("web-key", key);
-  viewerBase = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws?k=${key}&n=${n}`;
-  try {
-    mode = "viewer";
-    $("clear").classList.add("hidden");
-    $("health").classList.add("hidden");
-    $("uptime").classList.add("hidden");
-    show("live");
-    authUrl = null;
-    connect(viewerUrl);
-  } catch (e) {
-    $("view-error").textContent = String(e);
-  }
+function watch() {
+  mode = "viewer";
+  show("live");
+  viewerBase = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws?v=1`;
+  // El servicio de cuentas está en el mismo dominio que la web.
+  authUrl = location.origin;
+  connect(viewerUrl);
 }
 
 // ---------- Cuentas de Discord y suscripción ----------
@@ -354,7 +339,7 @@ class AuthError extends Error {
   constructor(code, invite) { super(code); this.code = code; this.invite = invite; }
 }
 
-let viewerBase = null;   // ws://127.0.0.1:PUERTO/?k=…&n=…
+let viewerBase = null;   // wss://…/ws?…
 let authUrl = null;      // https://… del servicio de cuentas
 let account = null;      // { name, sub, payments }
 let subTimer = null;
@@ -397,10 +382,12 @@ function onAuthRequired(msg) {
 function authNeeded(e) {
   wsUrl = null;
   setLive(false);
+  setPlaceholder("");
   $("login-panel").classList.remove("hidden");
   $("login-msg").textContent = e.code === "not_member"
     ? "Para ver este stream tienes que estar en el servidor de Discord. Únete y vuelve a iniciar sesión."
     : "Este stream es solo para miembros del servidor de Discord.";
+  if (loginError) { $("login-msg").textContent = loginError; loginError = null; }
   $("login-invite").classList.toggle("hidden", !(e.code === "not_member" && e.invite));
   $("login-invite").dataset.url = e.invite || "";
 }
@@ -418,6 +405,8 @@ async function exchangeCode(code) {
   localStorage.setItem(tokenKey(), body.token);
 }
 
+let loginError = null;
+
 // En la web, Discord vuelve a esta misma página con ?code=…&state=….
 async function finishWebLogin() {
   const q = new URLSearchParams(location.search);
@@ -428,7 +417,7 @@ async function finishWebLogin() {
   if (!expected || q.get("state") !== expected) return;
   authUrl = location.origin;
   try { await exchangeCode(q.get("code")); }
-  catch (e) { $("view-error").textContent = String(e.message || e); }
+  catch (e) { loginError = String(e.message || e); }
 }
 
 // Discord vuelve a esta misma página con ?code=…&state=….
@@ -499,13 +488,12 @@ let keys = null;
 
 function showKeys(k) {
   keys = k;
-  $("k-viewer").textContent = k.viewer_key;
   $("k-stream").textContent = k.stream_key;
   $("k-rtmp").textContent = `rtmp://127.0.0.1:${Number($("rtmp-port").value)}/live`;
   // La web vive en el VPS, con el certificado de <ip-con-guiones>.sslip.io.
   const host = $("vps").value.trim().split("@").pop();
   const web = /^\d+\.\d+\.\d+\.\d+$/.test(host) ? `${host.replace(/\./g, "-")}.sslip.io` : host;
-  $("k-web").textContent = web ? `https://${web}/#${k.viewer_key}` : "Indica el VPS";
+  $("k-web").textContent = web ? `https://${web}/` : "Indica el VPS";
 }
 
 for (const id of ["vps", "ws-port", "rtmp-port"])
@@ -517,23 +505,13 @@ async function regen(which, msg) {
   catch (e) { $("host-error").textContent = String(e); }
 }
 
-$("regen-viewer").addEventListener("click", () =>
-  regen("viewer", "¿Generar una clave de espectadores nueva? El código anterior dejará de funcionar."));
 $("regen-stream").addEventListener("click", () =>
   regen("stream", "¿Generar una clave de stream nueva? Tendrás que pegarla otra vez en OBS."));
 
 $("leave").addEventListener("click", leave);
 
-function applyLayout(stacked) {
-  $("live").classList.toggle("stacked", stacked);
-  $("layout").textContent = stacked ? "Chat al lado" : "Chat abajo";
-  localStorage.setItem("stacked", stacked ? "1" : "0");
-}
-$("layout").addEventListener("click", () => applyLayout(!$("live").classList.contains("stacked")));
-applyLayout(localStorage.getItem("stacked") === "1");
 document.querySelectorAll("[data-copy]").forEach((b) =>
   b.addEventListener("click", () => navigator.clipboard.writeText($(b.dataset.copy).textContent)));
-$("name").value = localStorage.getItem("name") || "";
 $("vps").value = localStorage.getItem("vps") ?? "stream@109.123.252.126";
 $("vps-key").value = localStorage.getItem("vps-key") ?? "~/.ssh/mestisexo_tunnel";
 
@@ -542,7 +520,6 @@ if (native) {
   invoke("get_keys").then(showKeys, (e) => { $("host-error").textContent = String(e); });
 } else {
   document.body.classList.add("web");
-  $("code").value = location.hash.slice(1) || localStorage.getItem("web-key") || "";
-  show("view-setup");
-  finishWebLogin().then(() => { if ($("code").value) join(); });
+  localStorage.removeItem("web-key");
+  finishWebLogin().then(watch);
 }

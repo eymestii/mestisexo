@@ -4,7 +4,7 @@ Streaming en tiempo real con chat, en tres piezas:
 
 - **Módulo del streamer** (Tauri 2 + Rust, solo Arch Linux): recibe la señal de OBS por RTMP y envía una sola copia al VPS por SSH.
 - **VPS**: el repetidor (`mestisexo-repeater`) reparte esa copia a todos los espectadores, el servicio de cuentas (`mestisexo-auth`) gestiona Discord y los pagos, y Caddy sirve todo por HTTPS.
-- **Web para espectadores**: `https://109-123-252-126.sslip.io/#CLAVE`. Funciona en cualquier navegador, también en móviles (iPhone con iOS 17.1 o posterior), sin descargar nada.
+- **Web para espectadores**: `https://109-123-252-126.sslip.io/`. Entra directo al directo y pide iniciar sesión con Discord (hay que ser miembro del servidor). Funciona en cualquier navegador, también en móviles (iPhone con iOS 17.1 o posterior), sin descargar nada.
 
 El chat se guarda solo en memoria (máximo 200 mensajes), se borra al terminar la sesión y nunca se escribe en disco.
 
@@ -70,7 +70,7 @@ Con el servicio `mestisexo-auth`, solo pueden ver el stream los miembros de tu s
 ## Seguridad
 
 - El RTMP solo escucha en `127.0.0.1`, así que OBS tiene que correr en el mismo equipo.
-- Sin la clave del enlace no se puede conectar. Las claves son fijas entre sesiones y se pueden cambiar con «Nueva».
+- En la web, la cuenta de Discord es lo que da acceso: no hace falta clave. La clave de stream de OBS es fija entre sesiones y se puede cambiar con «Nueva».
 - Todo va cifrado: los espectadores por HTTPS/wss y el streamer por SSH.
 - Límites del chat: 300 caracteres por mensaje y un mensaje cada 0,7 s por persona. El repetidor admite 500 espectadores como máximo (`--max-viewers`).
 

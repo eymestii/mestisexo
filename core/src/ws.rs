@@ -89,9 +89,13 @@ async fn handle(stream: TcpStream, shared: Arc<Shared>) {
     let mut ticket = String::new();
     let cb = |req: &Request, resp: Response| {
         let q = req.uri().query().unwrap_or("");
-        let key = shared.lock().key.clone();
-        if key.is_empty() || query_param(q, "k") != Some(key.as_str()) {
-            return Err(reject(StatusCode::FORBIDDEN));
+        // Con cuentas de Discord, el ticket es lo que da acceso: se entra aunque
+        // el streamer aún no haya conectado y se espera a la señal.
+        if !(shared.relay_mode && shared.auth.is_some()) {
+            let key = shared.lock().key.clone();
+            if key.is_empty() || query_param(q, "k") != Some(key.as_str()) {
+                return Err(reject(StatusCode::FORBIDDEN));
+            }
         }
         is_host = !shared.relay_mode && query_param(q, "h") == Some(shared.host_token.as_str());
         name = clean(&percent_decode(query_param(q, "n").unwrap_or("")), MAX_NAME);

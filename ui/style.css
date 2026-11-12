@@ -30,7 +30,7 @@ header { display: flex; align-items: center; gap: 14px; height: var(--head); fle
 .player { position: relative; width: min(100%, calc((100vh - var(--head)) * 16 / 9)); aspect-ratio: 16 / 9; }
 .player video { width: 100%; height: 100%; display: block; object-fit: contain; background: #000; }
 #placeholder { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); pointer-events: none; }
-header #layout { margin-right: auto; }
+header #viewers { margin-right: auto; }
 .health { display: flex; gap: 8px; }
 .pill { background: #2f2f35; border-radius: 999px; padding: 2px 10px; font-size: 12px; white-space: nowrap; }
 .pill.ok { background: #1f6f3f; }
@@ -47,12 +47,8 @@ header #layout { margin-right: auto; }
 
 .chat { width: 340px; display: flex; flex-direction: column; background: var(--panel); border-left: 1px solid var(--line); }
 
-/* Vídeo arriba, chat abajo: con el botón de disposición o en ventanas estrechas.
-   El vídeo ocupa el máximo posible manteniendo 16:9 y deja al menos --chat-min al chat. */
-#live.stacked .main { flex-direction: column; }
-#live.stacked .left { flex: 0 0 auto; }
-#live.stacked .player { width: min(100vw, calc((100vh - var(--head) - var(--chat-min)) * 16 / 9)); }
-#live.stacked .chat { width: auto; flex: 1; min-height: var(--chat-min); border-left: 0; border-top: 1px solid var(--line); }
+/* Ventanas estrechas o en vertical (móviles): vídeo arriba y chat abajo. El
+   vídeo ocupa el máximo posible manteniendo 16:9 y deja al menos --chat-min al chat. */
 @media (max-width: 760px), (max-aspect-ratio: 1/1) {
   .main { flex-direction: column; }
   .left { flex: 0 0 auto; }
@@ -84,7 +80,6 @@ body.web #chat-form { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
 }
 
 /* Streamer: solo el chat, a todo el ancho. El vídeo se ve en la web. */
-#live.host .left, #live.host #layout { display: none; }
+#live.host .left { display: none; }
 #live.host .main { flex-direction: column; }
 #live.host .chat { width: auto; flex: 1; border-left: 0; }
-#live.host #viewers { margin-right: auto; }
