@@ -9,7 +9,7 @@
 <body>
   <section id="home" class="screen">
     <h1>Mestisexo</h1>
-    <p class="muted">Streaming y chat local, sin servidores externos.</p>
+    <p class="muted">Streaming y chat en tiempo real.</p>
     <div class="cards">
       <button class="card" id="go-host"><b>Transmitir</b><span>Recibe la señal de OBS y compártela</span></button>
       <button class="card" id="go-view"><b>Ver un stream</b><span>Conéctate con el código del streamer</span></button>
@@ -65,12 +65,23 @@
         <div class="player">
           <video id="video" autoplay playsinline controls></video>
           <div id="placeholder">Esperando señal…</div>
+          <div id="login-panel" class="login hidden">
+            <p id="login-msg"></p>
+            <button id="login-discord" class="primary">Iniciar sesión con Discord</button>
+            <button id="login-invite" class="hidden">Unirme al servidor</button>
+          </div>
         </div>
       </div>
       <aside class="chat">
         <div class="chat-head">
           <b>Chat</b>
           <button id="clear" class="hidden">Vaciar</button>
+        </div>
+        <div id="account" class="account hidden">
+          <span id="account-sub" class="sub hidden" title="Suscriptor">SUB</span>
+          <b id="account-name"></b>
+          <button id="subscribe" class="primary hidden">Suscribirse · 2,99 $/mes</button>
+          <button id="logout">Salir de Discord</button>
         </div>
         <ul id="messages"></ul>
         <form id="chat-form">

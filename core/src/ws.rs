@@ -86,6 +86,7 @@ fn reject(code: StatusCode) -> ErrorResponse {
 async fn handle(stream: TcpStream, shared: Arc<Shared>) {
     let mut name = String::new();
     let mut is_host = false;
+    let mut ticket = String::new();
     let cb = |req: &Request, resp: Response| {
         let q = req.uri().query().unwrap_or("");
         let key = shared.lock().key.clone();
@@ -94,6 +95,7 @@ async fn handle(stream: TcpStream, shared: Arc<Shared>) {
         }
         is_host = !shared.relay_mode && query_param(q, "h") == Some(shared.host_token.as_str());
         name = clean(&percent_decode(query_param(q, "n").unwrap_or("")), MAX_NAME);
+        ticket = query_param(q, "t").unwrap_or("").to_string();
         if !is_host && shared.lock().viewers >= shared.max_viewers {
             return Err(reject(StatusCode::SERVICE_UNAVAILABLE));
         }
@@ -105,7 +107,23 @@ async fn handle(stream: TcpStream, shared: Arc<Shared>) {
         tokio_tungstenite::accept_hdr_async_with_config(stream, cb, Some(cfg)),
     )
     .await;
-    let Ok(Ok(ws)) = ws else { return };
+    let Ok(Ok(mut ws)) = ws else { return };
+    let mut sub = false;
+    if let Some(auth) = shared.auth.as_ref().filter(|_| !is_host) {
+        match crate::repeater::redeem(auth.internal, &ticket).await {
+            Some(id) => {
+                name = id.name;
+                sub = id.sub;
+            }
+            None => {
+                // Hay que iniciar sesión con Discord: la app lo hace en esta dirección y vuelve con un ticket.
+                let m = serde_json::json!({ "t": "auth", "url": auth.public_url, "retry": !ticket.is_empty() });
+                let _ = tokio::time::timeout(SEND_TIMEOUT, ws.send(Message::text(m.to_string()))).await;
+                let _ = tokio::time::timeout(SEND_TIMEOUT, ws.close(None)).await;
+                return;
+            }
+        }
+    }
     if name.is_empty() {
         name = if is_host { "Streamer".into() } else { "Anónimo".into() };
     }
@@ -165,7 +183,7 @@ async fn handle(stream: TcpStream, shared: Arc<Shared>) {
                         let text = clean(&text, MAX_TEXT);
                         if !text.is_empty() && last_msg.elapsed() >= MSG_INTERVAL {
                             last_msg = Instant::now();
-                            shared.chat_from(name.clone(), text, is_host);
+                            shared.chat_from(name.clone(), text, is_host, sub);
                         }
                     }
                 }

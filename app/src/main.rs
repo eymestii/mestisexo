@@ -209,6 +209,77 @@ async fn disconnect_viewer(app: State<'_, App>) -> Result<(), String> {
     Ok(())
 }
 
+/// Abre una dirección https:// en el navegador del sistema.
+fn open_browser(url: &str) -> Result<(), String> {
+    if !url.starts_with("https://") || url.chars().any(|c| c.is_whitespace() || c == '"') {
+        return Err("Dirección no válida".into());
+    }
+    #[cfg(windows)]
+    let mut cmd = {
+        use std::os::windows::process::CommandExt;
+        let mut c = std::process::Command::new("rundll32");
+        c.args(["url.dll,FileProtocolHandler", url]).creation_flags(0x0800_0000);
+        c
+    };
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("open");
+        c.arg(url);
+        c
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut cmd = {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(url);
+        c
+    };
+    cmd.spawn().map(|_| ()).map_err(|e| format!("No se pudo abrir el navegador: {e}"))
+}
+
+#[tauri::command]
+async fn open_url(url: String) -> Result<(), String> {
+    open_browser(&url)
+}
+
+/// Inicio de sesión con Discord: abre el navegador en el servicio de cuentas
+/// y espera a que este redirija a un puerto local con un código de un solo uso.
+#[tauri::command]
+async fn discord_login(auth_url: String) -> Result<String, String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let base = auth_url.trim_end_matches('/');
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| e.to_string())?;
+    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    let state = core::random_token(32);
+    open_browser(&format!("{base}/login?port={port}&state={state}"))?;
+
+    let wait = async {
+        loop {
+            let (mut s, _) = listener.accept().await.map_err(|e| e.to_string())?;
+            let mut buf = vec![0u8; 4096];
+            let n = tokio::time::timeout(std::time::Duration::from_secs(5), s.read(&mut buf)).await.unwrap_or(Ok(0)).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]);
+            let path = req.split_whitespace().nth(1).unwrap_or("");
+            let query = path.strip_prefix("/done?").unwrap_or("");
+            let param = |k: &str| query.split('&').find_map(|kv| kv.split_once('=').filter(|(a, _)| *a == k).map(|(_, v)| v.to_string()));
+            let ok = param("state").as_deref() == Some(state.as_str());
+            let code = param("code").filter(|c| ok && !c.is_empty() && c.len() <= 64 && c.chars().all(|c| c.is_ascii_alphanumeric()));
+            let body = if code.is_some() {
+                "<!doctype html><meta charset=utf-8><title>Mestisexo</title><body style=\"background:#0e0e10;color:#efeff1;font:16px system-ui;text-align:center;margin-top:20vh\"><h1>Sesión iniciada</h1><p>Ya puedes cerrar esta pestaña y volver a Mestisexo.</p>"
+            } else {
+                "<!doctype html><meta charset=utf-8><title>Mestisexo</title><p>Enlace no válido.</p>"
+            };
+            let resp = format!("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            let _ = s.write_all(resp.as_bytes()).await;
+            if let Some(c) = code {
+                return Ok::<String, String>(c);
+            }
+        }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(300), wait)
+        .await
+        .map_err(|_| "Se agotó el tiempo para iniciar sesión".to_string())?
+}
+
 fn main() {
     // WebKitGTK con NVIDIA suele dejar la ventana en blanco con el renderizador DMA-BUF.
     #[cfg(target_os = "linux")]
@@ -225,7 +296,9 @@ fn main() {
             stream_status,
             clear_chat,
             connect_viewer,
-            disconnect_viewer
+            disconnect_viewer,
+            open_url,
+            discord_login
         ])
         .on_window_event(|w, e| {
             if let tauri::WindowEvent::Destroyed = e {

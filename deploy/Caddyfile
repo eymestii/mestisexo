@@ -1,0 +1,10 @@
+# /etc/caddy/Caddyfile
+109-123-252-126.sslip.io {
+	@public path /login /callback /paid /webhooks/dodo /api/*
+	handle @public {
+		reverse_proxy 127.0.0.1:8092
+	}
+	handle {
+		respond 404
+	}
+}

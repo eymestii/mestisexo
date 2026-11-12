@@ -45,11 +45,11 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get install -y musl-tools
-          cargo build --release -p mestisexo-core --bin mestisexo-repeater --target x86_64-unknown-linux-musl
+          cargo build --release -p mestisexo-core -p mestisexo-auth --bin mestisexo-repeater --bin mestisexo-auth --target x86_64-unknown-linux-musl
           mkdir -p target/repeater
           tar -czf target/repeater/mestisexo-repeater-x86_64-linux.tar.gz \
-            -C target/x86_64-unknown-linux-musl/release mestisexo-repeater \
-            -C "$GITHUB_WORKSPACE/deploy" mestisexo-repeater.service 50-mestisexo-stream.conf
+            -C target/x86_64-unknown-linux-musl/release mestisexo-repeater mestisexo-auth \
+            -C "$GITHUB_WORKSPACE/deploy" .
 
       - uses: actions/upload-artifact@v4
         with:

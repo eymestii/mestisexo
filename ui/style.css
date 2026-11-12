@@ -70,3 +70,9 @@ header #layout { margin-right: auto; }
 #messages .host .n::after { content: " ★"; color: var(--accent); }
 #messages .sys { color: var(--muted); font-style: italic; }
 #chat-form { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); }
+#messages .sub, .account .sub { background: var(--accent); color: #fff; border-radius: 3px; padding: 0 4px; margin-right: 4px; font-size: 10px; font-weight: 700; vertical-align: 1px; }
+.login { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: rgba(0, 0, 0, .85); text-align: center; padding: 20px; }
+.login button.primary { background: #5865f2; }
+.account { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.account b { margin-right: auto; }
+.account button { padding: 4px 10px; font-size: 12px; }

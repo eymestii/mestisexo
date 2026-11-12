@@ -1,0 +1,22 @@
+[Unit]
+Description=Mestisexo: cuentas de Discord y suscripciones
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/mestisexo-auth
+EnvironmentFile=/etc/mestisexo/auth.env
+Restart=always
+RestartSec=2
+DynamicUser=yes
+StateDirectory=mestisexo-auth
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+MemoryMax=128M
+
+[Install]
+WantedBy=multi-user.target

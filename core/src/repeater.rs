@@ -51,12 +51,52 @@ pub struct RepeaterConfig {
     /// Dirección local donde llega el streamer por SSH, p. ej. `127.0.0.1:8091`.
     pub upstream: SocketAddr,
     pub max_viewers: usize,
+    /// Si se indica, los espectadores tienen que iniciar sesión con Discord.
+    pub auth: Option<Auth>,
+}
+
+/// Servicio de cuentas (`mestisexo-auth`) en el mismo VPS.
+#[derive(Clone)]
+pub struct Auth {
+    /// Dirección interna donde se canjean los tickets, p. ej. `127.0.0.1:8093`.
+    pub internal: SocketAddr,
+    /// Dirección pública HTTPS que usa la app para iniciar sesión.
+    pub public_url: String,
+}
+
+/// Identidad de un espectador ya comprobada por el servicio de cuentas.
+pub(crate) struct Identity {
+    pub name: String,
+    pub sub: bool,
+}
+
+/// Canjea el ticket de un solo uso que la app obtuvo del servicio de cuentas.
+pub(crate) async fn redeem(addr: SocketAddr, ticket: &str) -> Option<Identity> {
+    if ticket.is_empty() || ticket.len() > 64 || !ticket.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return None;
+    }
+    let work = async {
+        let mut s = TcpStream::connect(addr).await.ok()?;
+        let req = format!("GET /internal/redeem?t={ticket} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+        s.write_all(req.as_bytes()).await.ok()?;
+        let mut buf = Vec::new();
+        (&mut s).take(16 * 1024).read_to_end(&mut buf).await.ok()?;
+        let text = String::from_utf8_lossy(&buf);
+        let (head, body) = text.split_once("\r\n\r\n")?;
+        if !head.starts_with("HTTP/1.1 200") {
+            return None;
+        }
+        let v: serde_json::Value = serde_json::from_str(body).ok()?;
+        let name = ws::clean(v["name"].as_str()?, ws::MAX_NAME);
+        Some(Identity { name: if name.is_empty() { "Usuario".into() } else { name }, sub: v["sub"].as_bool().unwrap_or(false) })
+    };
+    tokio::time::timeout(Duration::from_secs(5), work).await.ok().flatten()
 }
 
 pub async fn run(cfg: RepeaterConfig) -> io::Result<()> {
     let public = TcpListener::bind(cfg.listen).await?;
     let upstream = TcpListener::bind(cfg.upstream).await?;
-    let shared = Shared::new(String::new(), cfg.max_viewers, true, "Esperando al streamer…");
+    let shared = Shared::new(String::new(), cfg.max_viewers, true, "Esperando al streamer…", cfg.auth.clone());
     tokio::spawn(ws::serve(public, shared.clone()));
     eprintln!("Repetidor: espectadores en {}, streamer en {}", cfg.listen, cfg.upstream);
 

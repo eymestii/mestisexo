@@ -198,7 +198,7 @@ fn from_repeater(shared: &Shared, data: &[u8]) {
             let text = crate::ws::clean(v["text"].as_str().unwrap_or(""), crate::ws::MAX_TEXT);
             if !text.is_empty() {
                 let name = if name.is_empty() { "Anónimo".into() } else { name };
-                shared.push_chat(name, text, false);
+                shared.push_chat(name, text, false, v["sub"].as_bool().unwrap_or(false));
             }
         }
         Some("viewers") => {

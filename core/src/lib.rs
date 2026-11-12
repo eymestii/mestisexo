@@ -14,7 +14,7 @@ mod tunnel;
 mod video;
 mod ws;
 
-pub use repeater::{run as run_repeater, RepeaterConfig};
+pub use repeater::{run as run_repeater, Auth as RepeaterAuth, RepeaterConfig};
 pub use tunnel::Tunnel;
 
 use rand::{distributions::Alphanumeric, Rng};
@@ -64,6 +64,9 @@ pub(crate) struct ChatMsg {
     pub text: String,
     pub ts: u64,
     pub host: bool,
+    /// Suscriptor (insignia en el chat).
+    #[serde(default)]
+    pub sub: bool,
 }
 
 /// Lo justo para que quien entra pueda decodificar al momento: el init y los
@@ -201,10 +204,12 @@ pub(crate) struct Shared {
     pub state: Mutex<State>,
     /// En el repetidor, canal hacia el streamer mientras está conectado.
     pub upstream: Mutex<Option<mpsc::Sender<String>>>,
+    /// En el repetidor, cuentas de Discord obligatorias para los espectadores.
+    pub auth: Option<repeater::Auth>,
 }
 
 impl Shared {
-    pub fn new(key: String, max_viewers: usize, relay_mode: bool, status: &str) -> Arc<Self> {
+    pub fn new(key: String, max_viewers: usize, relay_mode: bool, status: &str, auth: Option<repeater::Auth>) -> Arc<Self> {
         let (tx, _) = broadcast::channel(64);
         Arc::new(Shared {
             host_token: random_token(32),
@@ -213,6 +218,7 @@ impl Shared {
             tx,
             state: Mutex::new(State { key, status: status.into(), ..Default::default() }),
             upstream: Mutex::new(None),
+            auth,
         })
     }
 
@@ -228,10 +234,10 @@ impl Shared {
         self.lock().status = s.into();
     }
 
-    pub fn push_chat(&self, name: String, text: String, host: bool) {
+    pub fn push_chat(&self, name: String, text: String, host: bool, sub: bool) {
         let mut st = self.lock();
         st.next_id += 1;
-        let msg = ChatMsg { id: st.next_id, name, text, ts: now_ms(), host };
+        let msg = ChatMsg { id: st.next_id, name, text, ts: now_ms(), host, sub };
         let json = serde_json::json!({ "t": "chat", "m": &msg });
         st.chat.push_back(msg);
         while st.chat.len() > MAX_HISTORY {
@@ -242,11 +248,11 @@ impl Shared {
     }
 
     /// Mensaje de chat de un espectador conectado a este proceso.
-    pub fn chat_from(&self, name: String, text: String, host: bool) {
+    pub fn chat_from(&self, name: String, text: String, host: bool, sub: bool) {
         if self.relay_mode {
-            self.to_upstream(serde_json::json!({ "t": "chat", "name": name, "text": text }));
+            self.to_upstream(serde_json::json!({ "t": "chat", "name": name, "text": text, "sub": sub }));
         } else {
-            self.push_chat(name, text, host);
+            self.push_chat(name, text, host, sub);
         }
     }
 
@@ -383,7 +389,7 @@ pub async fn start(cfg: Config) -> io::Result<Handle> {
     let ws_port = listener.local_addr()?.port();
 
     let key = cfg.viewer_key.clone().unwrap_or_else(|| random_token(10));
-    let shared = Shared::new(key, MAX_VIEWERS, false, "Esperando a OBS…");
+    let shared = Shared::new(key, MAX_VIEWERS, false, "Esperando a OBS…", None);
 
     // RTMP solo en loopback: ffmpeg no valida la clave de stream, así que no
     // se expone a la red. OBS debe correr en el mismo equipo.

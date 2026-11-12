@@ -112,6 +112,13 @@ function setPlaceholder(text) {
 function addLine(m) {
   const li = document.createElement("li");
   if (m.host) li.className = "host";
+  if (m.sub) {
+    const b = document.createElement("span");
+    b.className = "sub";
+    b.textContent = "SUB";
+    b.title = "Suscriptor";
+    li.append(b);
+  }
   const n = document.createElement("span");
   n.className = "n";
   n.textContent = m.name + ":";
@@ -152,10 +159,24 @@ $("chat-form").addEventListener("submit", (e) => {
 
 // ---------- Conexión WebSocket ----------
 
-function connect(url) {
+// wsUrl puede ser una función asíncrona que devuelve la dirección: con cuentas
+// de Discord cada conexión necesita un ticket nuevo.
+async function connect(url) {
   wsUrl = url;
   clearTimeout(reconnectTimer);
-  ws = new WebSocket(url);
+  let target = url;
+  if (typeof url === "function") {
+    try { target = await url(); }
+    catch (e) {
+      if (wsUrl !== url) return;
+      if (e instanceof AuthError) { authNeeded(e); return; }
+      sysLine(String(e.message || e) + " Reintentando…");
+      reconnectTimer = setTimeout(() => wsUrl === url && connect(url), 5000);
+      return;
+    }
+    if (wsUrl !== url) return;
+  }
+  ws = new WebSocket(target);
   ws.binaryType = "arraybuffer";
   ws.onmessage = (e) => {
     if (typeof e.data !== "string") {
@@ -179,13 +200,15 @@ function connect(url) {
       case "offline": setLive(false); break;
       case "clear": $("messages").replaceChildren(); sysLine("El streamer vació el chat."); break;
       case "end": sysLine("La sesión ha terminado."); setLive(false); wsUrl = null; break;
+      case "auth": onAuthRequired(msg); break;
     }
   };
   ws.onclose = (ev) => {
     if (!wsUrl || ev.target !== ws) return;
     setLive(false);
     sysLine("Conexión perdida, reintentando…");
-    reconnectTimer = setTimeout(() => wsUrl && connect(wsUrl), 3000);
+    const again = wsUrl;
+    reconnectTimer = setTimeout(() => wsUrl === again && connect(again), 3000);
   };
 }
 
@@ -198,6 +221,10 @@ async function leave() {
   clearTimeout(reconnectTimer);
   clearInterval(statusTimer);
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  clearInterval(subTimer);
+  account = null;
+  renderAccount();
+  $("login-panel").classList.add("hidden");
   player.destroy();
   $("messages").replaceChildren();
   if (mode === "host") await invoke("stop_stream").catch(() => {});
@@ -283,10 +310,138 @@ $("join").addEventListener("click", async () => {
     $("uptime").classList.add("hidden");
     show("live");
     const n = encodeURIComponent($("name").value.trim());
-    connect(`ws://127.0.0.1:${port}/?k=${encodeURIComponent(key)}&n=${n}`);
+    viewerBase = `ws://127.0.0.1:${port}/?k=${encodeURIComponent(key)}&n=${n}`;
+    authUrl = null;
+    connect(viewerUrl);
   } catch (e) {
     $("view-error").textContent = String(e);
   }
+});
+
+// ---------- Cuentas de Discord y suscripción ----------
+// Si el repetidor exige cuenta, responde {t:"auth", url} y cierra. La app
+// inicia sesión en esa dirección (navegador del sistema), guarda el token de
+// sesión y pide un ticket de un solo uso para cada conexión.
+
+class AuthError extends Error {
+  constructor(code, invite) { super(code); this.code = code; this.invite = invite; }
+}
+
+let viewerBase = null;   // ws://127.0.0.1:PUERTO/?k=…&n=…
+let authUrl = null;      // https://… del servicio de cuentas
+let account = null;      // { name, sub, payments }
+let subTimer = null;
+
+const tokenKey = () => `auth-token:${authUrl}`;
+const getToken = () => authUrl && localStorage.getItem(tokenKey());
+
+async function authApi(path, method = "GET") {
+  const token = getToken();
+  if (!token) throw new AuthError("session");
+  let r;
+  try { r = await fetch(authUrl + path, { method, headers: { Authorization: `Bearer ${token}` } }); }
+  catch { throw new Error("No se pudo contactar con el servicio de cuentas."); }
+  const body = await r.json().catch(() => ({}));
+  if (r.status === 401) { localStorage.removeItem(tokenKey()); throw new AuthError("session"); }
+  if (r.status === 403 && body.error === "not_member") throw new AuthError("not_member", body.invite);
+  if (!r.ok) throw new Error(body.error || `Error ${r.status}`);
+  return body;
+}
+
+async function viewerUrl() {
+  if (!authUrl) return viewerBase;
+  const [{ ticket }, me] = await Promise.all([authApi("/api/ticket", "POST"), authApi("/api/me")]);
+  account = me;
+  renderAccount();
+  return `${viewerBase}&t=${ticket}`;
+}
+
+function onAuthRequired(msg) {
+  if (typeof msg.url !== "string" || !msg.url.startsWith("https://")) return;
+  if (ws) { ws.onclose = null; ws.close(); }
+  if (authUrl !== msg.url) {
+    authUrl = msg.url;
+    // Primera vez: con la URL del servicio ya se puede pedir un ticket.
+    if (getToken() && !msg.retry) { connect(viewerUrl); return; }
+  }
+  authNeeded(new AuthError("session"));
+}
+
+function authNeeded(e) {
+  wsUrl = null;
+  setLive(false);
+  $("login-panel").classList.remove("hidden");
+  $("login-msg").textContent = e.code === "not_member"
+    ? "Para ver este stream tienes que estar en el servidor de Discord. Únete y vuelve a iniciar sesión."
+    : "Este stream es solo para miembros del servidor de Discord.";
+  $("login-invite").classList.toggle("hidden", !(e.code === "not_member" && e.invite));
+  $("login-invite").dataset.url = e.invite || "";
+}
+
+$("login-discord").addEventListener("click", async () => {
+  $("login-msg").textContent = "Termina el inicio de sesión en el navegador…";
+  $("login-discord").disabled = true;
+  try {
+    const code = await invoke("discord_login", { authUrl });
+    const r = await fetch(`${authUrl}/api/exchange?code=${encodeURIComponent(code)}`, { method: "POST" });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok || !body.token) throw new Error("No se pudo completar el inicio de sesión.");
+    localStorage.setItem(tokenKey(), body.token);
+    $("login-panel").classList.add("hidden");
+    connect(viewerUrl);
+  } catch (e) {
+    $("login-msg").textContent = String(e.message || e);
+  } finally {
+    $("login-discord").disabled = false;
+  }
+});
+
+$("login-invite").addEventListener("click", () => {
+  const url = $("login-invite").dataset.url;
+  if (url) invoke("open_url", { url }).catch(() => {});
+});
+
+function renderAccount() {
+  const show = !!account;
+  $("account").classList.toggle("hidden", !show);
+  if (!show) return;
+  $("account-name").textContent = account.name;
+  $("account-sub").classList.toggle("hidden", !account.sub);
+  $("subscribe").classList.toggle("hidden", account.sub || !account.payments);
+}
+
+$("subscribe").addEventListener("click", async () => {
+  try {
+    const { url } = await authApi("/api/checkout", "POST");
+    await invoke("open_url", { url });
+    sysLine("Completa el pago en el navegador. La insignia aparecerá al confirmarse.");
+    // Al confirmarse el pago, reconectar para entrar con la insignia.
+    clearInterval(subTimer);
+    let tries = 0;
+    subTimer = setInterval(async () => {
+      if (++tries > 120 || !authUrl) { clearInterval(subTimer); return; }
+      const me = await authApi("/api/me").catch(() => null);
+      if (me && me.sub) {
+        clearInterval(subTimer);
+        account = me;
+        renderAccount();
+        sysLine("¡Gracias por suscribirte!");
+        if (ws) ws.close();
+      }
+    }, 5000);
+  } catch (e) {
+    if (e instanceof AuthError) authNeeded(e);
+    else sysLine(String(e.message || e));
+  }
+});
+
+$("logout").addEventListener("click", async () => {
+  await authApi("/api/logout", "POST").catch(() => {});
+  localStorage.removeItem(tokenKey());
+  account = null;
+  renderAccount();
+  if (ws) { ws.onclose = null; ws.close(); }
+  authNeeded(new AuthError("session"));
 });
 
 // ---------- Navegación ----------

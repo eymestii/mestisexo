@@ -58,6 +58,15 @@ El repetidor escucha a los espectadores en `0.0.0.0:8090` y al streamer en `127.
 
 También puedes usar Tailscale o ZeroTier sin VPS. En ese caso tu PC envía una copia por espectador. Si Tailscale está conectado y no configuras un VPS, el código del stream usa tu IP de Tailscale.
 
+### Cuentas de Discord y suscripciones (VPS)
+
+Con el servicio `mestisexo-auth`, solo pueden ver el stream los miembros de tu servidor de Discord. En el chat aparecen con su nombre de Discord, y los suscriptores (2,99 $/mes, cobrados con Dodo Payments) llevan la insignia **SUB** y el rol «Suscriptor» en Discord. El rol se quita al cancelar la suscripción.
+
+- Caddy sirve `https://109-123-252-126.sslip.io` con un certificado de Let's Encrypt y lo reenvía a `127.0.0.1:8092`.
+- Los secretos solo están en el VPS, en `/etc/mestisexo/auth.env` (root, 600). La plantilla está en `deploy/auth.env.example`. Si una parte no tiene claves, queda desactivada.
+- La app inicia sesión en el navegador del sistema y recibe un código en un puerto local. Para cada conexión al stream pide un ticket de un solo uso, que el repetidor canjea por la red interna (`127.0.0.1:8093`).
+- Para exigir la cuenta en el repetidor: `install -D -m 644 deploy/10-discord.conf /etc/systemd/system/mestisexo-repeater.service.d/10-discord.conf && systemctl daemon-reload && systemctl restart mestisexo-repeater`.
+
 ### Tiempo real
 
 - ffmpeg corta la señal en trozos de 0,25 s y los envía en cuanto salen, sin búfer de entrada.
