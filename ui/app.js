@@ -40,7 +40,7 @@ const networkMonitor = {
   maxSamples: 20,
   bytesReceived: 0,
   lastMeasure: Date.now(),
-  warningShown: false,
+  poorReported: false,
 
   recordBytes(bytes) {
     this.bytesReceived += bytes;
@@ -102,34 +102,24 @@ const networkMonitor = {
     const indicator = $("quality-indicator");
     if (!indicator) return;
 
-    const labels = {
-      measuring: "Midiendo...",
-      poor: "⚠️ Conexión lenta",
-      fair: "⚡ Conexión media",
-      good: "✓ Buena conexión",
-      excellent: "✓ Excelente"
-    };
+    // Solo se avisa de lo que el espectador puede entender como problema. Con
+    // buena conexión no se dice nada: no hay nada que hacer al respecto.
+    const labels = { poor: "⚠️ Conexión lenta", fair: "⚡ Conexión media" };
+    const label = labels[quality.level] || "";
+    indicator.textContent = label;
+    indicator.className = label ? `quality-indicator quality-${quality.level}` : "quality-indicator";
+    indicator.classList.toggle("hidden", !label);
 
-    indicator.textContent = labels[quality.level] || "";
-    indicator.className = `quality-${quality.level}`;
-    
     const bw = Math.round(quality.bandwidth);
     const buf = quality.bufferHealth.toFixed(2);
     indicator.title = `Ancho de banda: ${bw} kbps\nBuffer: ${buf}s de ${liveTarget.value.toFixed(1)}s de margen`;
 
-    // Enviar hint al servidor si la calidad es pobre
-    if (quality.level === "poor" && ws && ws.readyState === WebSocket.OPEN) {
-      if (!this.warningShown) {
-        sysLine(`Tu conexión es lenta (${bw} kbps). Puede haber cortes.`);
-        this.warningShown = true;
-      }
-      ws.send(JSON.stringify({
-        t: "quality_hint",
-        bandwidth: Math.floor(quality.bandwidth),
-        bufferHealth: quality.bufferHealth
-      }));
-    } else if (quality.level !== "poor") {
-      this.warningShown = false;
+    // Al streamer solo le interesa cuántos espectadores van mal ahora, así que
+    // se informa al entrar y al salir del estado malo, no en cada medición.
+    const poor = quality.level === "poor";
+    if (poor !== this.poorReported && ws && ws.readyState === WebSocket.OPEN) {
+      this.poorReported = poor;
+      ws.send(JSON.stringify({ t: "quality_hint", bandwidth: Math.floor(quality.bandwidth), poor }));
     }
   },
 
@@ -137,7 +127,7 @@ const networkMonitor = {
     this.samples = [];
     this.bytesReceived = 0;
     this.lastMeasure = Date.now();
-    this.warningShown = false;
+    this.poorReported = false;
   }
 };
 
@@ -405,7 +395,9 @@ function setLive(live, codec) {
   setPlaceholder(live ? "" : "Esperando señal…");
   
   // El indicador de calidad es solo para los espectadores.
-  $("quality-indicator").classList.toggle("hidden", !(mode === "viewer" && live));
+  // El indicador de calidad es solo para espectadores, y únicamente cuando hay
+  // algo que avisar: lo gestiona networkMonitor.updateQualityUI().
+  if (!(mode === "viewer" && live)) $("quality-indicator").classList.add("hidden");
 
   if (mode === "host") return;
   if (live && codec) player.reset(codec);
@@ -571,27 +563,17 @@ function renderHealth(st, prev) {
   if (st.tunnel_up === null || st.tunnel_up === undefined) $("h-tunnel").classList.add("hidden");
   else pill("h-tunnel", st.tunnel_up ? "ok" : "bad", st.tunnel_up ? "VPS conectado" : "VPS caído", st.tunnel);
 
-  // Mostrar estadísticas de calidad de espectadores
-  const totalReports = st.quality_poor_count + st.quality_fair_count + st.quality_good_count;
-  if (st.live && totalReports > 0) {
-    const poorPct = Math.round((st.quality_poor_count / totalReports) * 100);
-    const fairPct = Math.round((st.quality_fair_count / totalReports) * 100);
+  // Espectadores con problemas de conexión ahora mismo. La píldora solo
+  // aparece si hay alguno: «todo bien» no es información que requiera sitio.
+  const viewers = (st.viewers || 0) + (st.relay_viewers || 0);
+  const poor = st.quality_poor_now || 0;
+  if (st.live && poor > 0 && viewers > 0) {
+    const pct = Math.round((poor / viewers) * 100);
     const avgBw = Math.round(st.quality_avg_bandwidth);
-    
-    let qualityClass = "ok";
-    let qualityText = "Calidad OK";
-    
-    if (poorPct > 30) {
-      qualityClass = "bad";
-      qualityText = `⚠ ${poorPct}% con lag`;
-    } else if (poorPct > 15 || fairPct > 40) {
-      qualityClass = "warn";
-      qualityText = `${poorPct}% con lag`;
-    }
-    
-    const tooltip = `Espectadores:\n✓ Buenos: ${st.quality_good_count}\n⚡ Medios: ${st.quality_fair_count}\n⚠ Lentos: ${st.quality_poor_count}\nBW promedio: ${avgBw} kbps\n\nRecomendado: ${Math.round(avgBw * 0.7)} kbps`;
-    
-    pill("h-quality", qualityClass, qualityText, tooltip);
+    const tooltip = `${poor} de ${viewers} espectadores con la conexión justa.\n` +
+      (avgBw > 0 ? `Ancho de banda medio de quien informa: ${avgBw} kbps.\n` : "") +
+      "Si el porcentaje se mantiene alto, baja el bitrate en OBS.";
+    pill("h-quality", pct > 30 ? "bad" : "warn", `${pct}% con lag`, tooltip);
     $("h-quality").classList.remove("hidden");
   } else {
     $("h-quality").classList.add("hidden");

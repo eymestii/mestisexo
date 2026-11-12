@@ -314,10 +314,9 @@ pub struct Status {
     pub frags_total: u64,
     pub last_data_ms: u64,
     pub now_ms: u64,
-    /// Estadísticas de calidad de red
-    pub quality_poor_count: usize,
-    pub quality_fair_count: usize,
-    pub quality_good_count: usize,
+    /// Espectadores con problemas de conexión ahora mismo, y ancho de banda
+    /// medio de la audiencia que ha informado.
+    pub quality_poor_now: usize,
     pub quality_avg_bandwidth: f32,
 }
 
@@ -354,9 +353,7 @@ impl Handle {
             frags_total: st.frags_total,
             last_data_ms: st.last_data_ms,
             now_ms: now_ms(),
-            quality_poor_count: st.quality_stats.poor_count,
-            quality_fair_count: st.quality_stats.fair_count,
-            quality_good_count: st.quality_stats.good_count,
+            quality_poor_now: st.quality_stats.poor_now,
             quality_avg_bandwidth: st.quality_stats.avg_bandwidth,
         }
     }

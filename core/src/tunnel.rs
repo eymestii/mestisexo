@@ -205,6 +205,23 @@ fn from_repeater(shared: &Shared, data: &[u8]) {
             shared.lock().relay_viewers = v["n"].as_u64().unwrap_or(0) as usize;
             shared.viewers_changed();
         }
+        // Un espectador del repetidor entró o salió de un estado de mala
+        // conexión. Sin esto la píldora de calidad nunca se llenaría cuando
+        // hay repetidor por medio, que es el caso normal.
+        Some("quality_hint") => {
+            let poor = v["poor"].as_bool().unwrap_or(false);
+            let bw = v["bandwidth"].as_f64().unwrap_or(0.0) as f32;
+            let mut st = shared.lock();
+            let q = &mut st.quality_stats;
+            if poor {
+                q.poor_now += 1;
+            } else {
+                q.poor_now = q.poor_now.saturating_sub(1);
+            }
+            if bw > 0.0 {
+                q.avg_bandwidth = if q.avg_bandwidth == 0.0 { bw } else { 0.3 * bw + 0.7 * q.avg_bandwidth };
+            }
+        }
         _ => {}
     }
 }

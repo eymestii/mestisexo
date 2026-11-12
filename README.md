@@ -10,11 +10,11 @@ El chat se guarda solo en memoria (máximo 200 mensajes), se borra al terminar l
 
 ## Calidad de conexión del espectador
 
-La web mide el ancho de banda que recibe cada espectador (bytes por segundo del propio stream) y lo que le queda en el búfer, y lo resume en una etiqueta en la cabecera: «Buena conexión», «Conexión media» o «Conexión lenta». Es informativo: no cambia la calidad del vídeo, que es única para todos.
+La web mide el ancho de banda que recibe cada espectador (bytes por segundo del propio stream) y lo que le queda en el búfer. Si va justo aparece un aviso en su cabecera: «Conexión lenta» o «Conexión media». Con buena conexión no se muestra nada, porque no hay nada que el espectador pueda hacer al respecto. Es informativo: no cambia la calidad del vídeo, que es única para todos.
 
-Cuando un espectador baja de 1 Mbit/s, su navegador manda un aviso al repetidor, que lleva la cuenta y la pasa al streamer. En la ventana del streamer aparece entonces una píldora con el porcentaje de espectadores con problemas y, al pasar el ratón, el ancho de banda medio de la audiencia. Si ese porcentaje sube, baja el bitrate en OBS.
+Cuando un espectador baja de 1 Mbit/s su navegador avisa al repetidor, y vuelve a avisar en cuanto se recupera. El repetidor solo cuenta esos cambios de estado, así que lo que ve el streamer es cuántos espectadores van mal **ahora**, no cuántos tuvieron un bache en algún momento. Quien cierra la pestaña estando mal también se descuenta.
 
-Dos limitaciones de esa píldora: los contadores son acumulativos desde que arrancó la sesión, así que un espectador que tuvo un bache al principio sigue contando durante horas, y solo informan los espectadores con problemas, por lo que el porcentaje queda sesgado hacia arriba. Sirve para ver una tendencia, no como medida exacta.
+En la ventana del streamer aparece entonces una píldora con el porcentaje de la audiencia con problemas y, al pasar el ratón, el ancho de banda medio de quien ha informado. La píldora solo aparece si hay alguien con problemas. Si el porcentaje se mantiene alto, baja el bitrate en OBS: sin transcodificación es la única palanca.
 
 ## Reproductor del espectador
 

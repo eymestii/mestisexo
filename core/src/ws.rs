@@ -19,13 +19,12 @@ const MSG_INTERVAL: Duration = Duration::from_millis(700);
 pub(crate) const SEND_BUFFER: usize = 128 * 1024;
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Estadísticas de calidad de red reportadas por los clientes
+/// Cuántos espectadores están teniendo problemas **ahora**. Cada conexión
+/// avisa cuando entra y cuando sale de un estado malo, así que esto es el
+/// estado actual, no un acumulado histórico.
 #[derive(Default)]
 pub(crate) struct QualityStats {
-    pub poor_count: usize,
-    pub fair_count: usize,
-    pub good_count: usize,
-    pub total_reports: usize,
+    pub poor_now: usize,
     pub avg_bandwidth: f32,
 }
 
@@ -35,10 +34,10 @@ enum In {
     Chat { text: String },
     Ping,
     #[serde(rename = "quality_hint")]
-    QualityHint { 
+    QualityHint {
         bandwidth: u32,
-        #[serde(rename = "bufferHealth")]
-        buffer_health: f32,
+        /// `true` mientras el espectador va mal; `false` en cuanto se recupera.
+        poor: bool,
     },
 }
 
@@ -180,6 +179,8 @@ async fn handle(stream: TcpStream, shared: Arc<Shared>) {
     let mut last_msg = Instant::now() - MSG_INTERVAL;
     let mut ping = tokio::time::interval(Duration::from_secs(20));
     let mut gate = Gate::default();
+    // Si este espectador está contado como «va mal» ahora mismo.
+    let mut poor_now = false;
     while ok {
         tokio::select! {
             out = rx.recv() => match out {
@@ -212,36 +213,37 @@ async fn handle(stream: TcpStream, shared: Arc<Shared>) {
                                 }
                             }
                             In::Ping => {}
-                            In::QualityHint { bandwidth, buffer_health } if !is_host => {
-                                // Actualizar estadísticas de calidad
-                                let mut st = shared.lock();
-                                st.quality_stats.total_reports += 1;
-                                
-                                // Clasificar la calidad según el bandwidth
-                                if bandwidth < 1000 || buffer_health < 0.3 {
-                                    st.quality_stats.poor_count += 1;
-                                } else if bandwidth < 1500 || buffer_health < 0.5 {
-                                    st.quality_stats.fair_count += 1;
-                                } else {
-                                    st.quality_stats.good_count += 1;
+                            In::QualityHint { bandwidth, poor } if !is_host => {
+                                // Solo cuenta el cambio de estado: así el total
+                                // refleja cuántos van mal ahora, y no se queda
+                                // contando a quien tuvo un bache hace una hora.
+                                if poor != poor_now {
+                                    poor_now = poor;
+                                    let mut st = shared.lock();
+                                    if poor {
+                                        st.quality_stats.poor_now += 1;
+                                    } else {
+                                        st.quality_stats.poor_now =
+                                            st.quality_stats.poor_now.saturating_sub(1);
+                                    }
                                 }
-                                
-                                // Calcular promedio móvil del bandwidth
-                                let alpha = 0.3; // Factor de suavizado
-                                if st.quality_stats.avg_bandwidth == 0.0 {
-                                    st.quality_stats.avg_bandwidth = bandwidth as f32;
-                                } else {
-                                    st.quality_stats.avg_bandwidth = 
-                                        alpha * (bandwidth as f32) + (1.0 - alpha) * st.quality_stats.avg_bandwidth;
+                                {
+                                    // Media móvil del ancho de banda de la audiencia.
+                                    let mut st = shared.lock();
+                                    let avg = &mut st.quality_stats.avg_bandwidth;
+                                    *avg = if *avg == 0.0 {
+                                        bandwidth as f32
+                                    } else {
+                                        0.3 * bandwidth as f32 + 0.7 * *avg
+                                    };
                                 }
-                                
-                                // Si en modo relay, reenviar al streamer
+                                // En el repetidor del VPS, el streamer es quien
+                                // ve la píldora: hay que pasarle el aviso.
                                 if shared.relay_mode {
-                                    drop(st);
                                     shared.to_upstream(serde_json::json!({
                                         "t": "quality_hint",
                                         "bandwidth": bandwidth,
-                                        "bufferHealth": buffer_health
+                                        "poor": poor
                                     }));
                                 }
                             }
@@ -259,6 +261,11 @@ async fn handle(stream: TcpStream, shared: Arc<Shared>) {
     if !is_host {
         let mut st = shared.lock();
         st.viewers = st.viewers.saturating_sub(1);
+        // Quien se va deja de contar: si no, cerrar la pestaña con mala
+        // conexión dejaría el contador alto para siempre.
+        if poor_now {
+            st.quality_stats.poor_now = st.quality_stats.poor_now.saturating_sub(1);
+        }
     }
     shared.viewers_changed();
 }

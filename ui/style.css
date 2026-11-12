@@ -46,7 +46,8 @@ header #viewers { margin-right: auto; }
 .pill.bad { background: #8b1e1e; }
 #uptime { font-variant-numeric: tabular-nums; font-weight: 600; }
 
-/* Indicador de calidad de conexión */
+/* Aviso de conexión del espectador. Solo aparece si hay algo que avisar: con
+   buena conexión no se muestra nada. */
 .quality-indicator { 
   font-size: 12px; 
   padding: 2px 8px; 
@@ -54,11 +55,8 @@ header #viewers { margin-right: auto; }
   font-weight: 500;
   white-space: nowrap;
 }
-.quality-measuring { background: #2f2f35; color: var(--muted); }
 .quality-poor { background: #8b1e1e; color: #fff; }
 .quality-fair { background: #8a6d00; color: #fff; }
-.quality-good { background: #1f6f3f; color: #fff; }
-.quality-excellent { background: #0e5f46; color: #fff; }
 
 /* En móviles ocultar el indicador cuando no hay espacio */
 @media (max-width: 600px) {
