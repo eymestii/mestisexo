@@ -19,13 +19,9 @@
 
   onMount(() => {
     chat.connect(`ws://127.0.0.1:${session.ws_port}/?k=${session.key}&h=${session.host_token}`);
-    let prev: Status | null = null;
     const tick = async () => {
       const st = await invoke<Status | null>("stream_status").catch(() => null);
-      if (st) {
-        h = health(st, prev);
-        prev = st;
-      }
+      if (st) h = health(st);
     };
     tick();
     timer = setInterval(tick, 1000);
@@ -50,13 +46,8 @@
     <span class="badge" class:on={live}>{live ? "EN VIVO" : "OFFLINE"}</span>
     {#if h?.uptime}<span id="uptime">{h.uptime}</span>{/if}
     <span id="viewers">{viewersLabel(chat.viewers)}</span>
-    {#if h}
-      <div class="health">
-        <span class="pill {h.obs.cls}" title={h.obs.title}>{h.obs.text}</span>
-        <span class="pill {h.rate.cls}">{h.rate.text}</span>
-        {#if h.tunnel}<span class="pill {h.tunnel.cls}" title={h.tunnel.title}>{h.tunnel.text}</span>{/if}
-        {#if h.quality}<span class="pill {h.quality.cls}" title={h.quality.title}>{h.quality.text}</span>{/if}
-      </div>
+    {#if h?.quality}
+      <span class="pill {h.quality.cls}" title={h.quality.title}>{h.quality.text}</span>
     {/if}
   </header>
   <div class="main">

@@ -32,29 +32,10 @@ header { display: flex; align-items: center; gap: 14px; height: var(--head); fle
 #placeholder { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); pointer-events: none; }
 
 header #viewers { margin-right: auto; }
-.health { display: flex; gap: 8px; }
 .pill { background: #2f2f35; border-radius: 999px; padding: 2px 10px; font-size: 12px; white-space: nowrap; }
-.pill.ok { background: #1f6f3f; }
 .pill.warn { background: #8a6d00; }
 .pill.bad { background: #8b1e1e; }
 #uptime { font-variant-numeric: tabular-nums; font-weight: 600; }
-
-/* Aviso de conexión del espectador. Solo aparece si hay algo que avisar: con
-   buena conexión no se muestra nada. */
-.quality-indicator { 
-  font-size: 12px; 
-  padding: 2px 8px; 
-  border-radius: 4px; 
-  font-weight: 500;
-  white-space: nowrap;
-}
-.quality-poor { background: #8b1e1e; color: #fff; }
-.quality-fair { background: #8a6d00; color: #fff; }
-
-/* En móviles ocultar el indicador cuando no hay espacio */
-@media (max-width: 600px) {
-  body.web .quality-indicator { display: none !important; }
-}
 
 .info { padding: 12px; display: flex; flex-direction: column; gap: 8px; }
 .info div { display: grid; grid-template-columns: 190px 1fr auto; gap: 10px; align-items: center; }
@@ -85,8 +66,7 @@ header #viewers { margin-right: auto; }
 #messages .sub, .account .sub { background: var(--accent); color: #fff; border-radius: 3px; padding: 0 4px; margin-right: 4px; font-size: 10px; font-weight: 700; vertical-align: 1px; }
 .login { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: rgba(0, 0, 0, .85); text-align: center; padding: 20px; }
 .login button.primary { background: #5865f2; }
-.account { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
-.account b { margin-right: auto; }
+.account { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
 .account button { padding: 4px 10px; font-size: 12px; }
 
 /* Móviles: márgenes de la muesca, cabecera que no desborda y textos legibles. */

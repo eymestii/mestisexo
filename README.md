@@ -20,7 +20,7 @@ El empaquetado lo hace el repetidor, no ffmpeg: el muxer HLS de ffmpeg (9.0.2) n
 
 ## Calidad de conexión del espectador
 
-La web mide, en el propio elemento de vídeo, cuántos segundos tiene por delante en el búfer y cuántas veces se le ha cortado. Si va justo aparece un aviso en su cabecera: «Conexión lenta» o «Conexión media». Con buena conexión no se muestra nada, porque no hay nada que el espectador pueda hacer al respecto. Es informativo: no cambia la calidad del vídeo, que es única para todos.
+La web mide, en el propio elemento de vídeo, cuántos segundos tiene por delante en el búfer y cuántas veces se le ha cortado. Al espectador no se le muestra nada: la medida solo sirve para avisar al streamer. No cambia la calidad del vídeo, que es única para todos.
 
 No se cuentan bytes a mano, como se hacía con el WebSocket: los trozos los descarga el reproductor y pueden venir de la caché del navegador o del CDN sin pasar por el código de la página. En Chrome y Firefox, hls.js sí da una estimación del ancho de banda, que se muestra al pasar el ratón por el aviso; Safari no la expone.
 
@@ -66,7 +66,7 @@ Cada pantalla va en su propio fichero: el espectador no descarga el código del 
    En *Salida* usa **x264/NVENC H.264, AAC, perfil main o high, intervalo de fotogramas clave 2 s**.
 3. Comparte el «Enlace para espectadores».
 
-Durante el directo, tu ventana muestra solo el chat y el estado (OBS, kbps, VPS). El vídeo no se te envía, así que tu PC no gasta en decodificarlo. Para ver cómo queda, abre el enlace en un navegador.
+Durante el directo, tu ventana muestra solo el chat, el tiempo en directo y los espectadores. El vídeo no se te envía, así que tu PC no gasta en decodificarlo. Para ver cómo queda, abre el enlace en un navegador.
 
 ## VPS
 

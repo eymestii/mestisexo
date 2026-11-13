@@ -24,9 +24,7 @@ export function levelFor(ahead: number, lastStall: number, now: number): Level {
   return "good";
 }
 
-// Solo se avisa de lo que el espectador puede entender como problema. Con
-// buena conexión no se dice nada: no hay nada que hacer al respecto.
-export const LABELS: Record<Level, string> = { poor: "⚠️ Conexión lenta", fair: "⚡ Conexión media", good: "" };
+// El espectador no ve el nivel: solo se informa al streamer de cuántos van mal.
 
 export interface MonitorSource {
   video(): HTMLVideoElement | null;

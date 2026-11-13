@@ -11,24 +11,11 @@ const base: Status = {
 };
 
 describe("health", () => {
-  it("calcula los kbps entre dos lecturas", () => {
-    const prev = { ...base, now_ms: 9_000, bytes_total: 750_000 };
-    expect(health(base, prev).rate.text).toBe("2000 kbps");
-  });
-
-  it("marca OBS sin datos tras 3 s de silencio", () => {
-    expect(health({ ...base, last_data_ms: 6_000 }, null).obs.cls).toBe("bad");
-  });
-
   it("solo muestra la píldora de calidad si hay alguien con problemas", () => {
-    expect(health(base, null).quality).toBeNull();
-    const q = health({ ...base, quality_poor_now: 4 }, null).quality!;
+    expect(health(base).quality).toBeNull();
+    const q = health({ ...base, quality_poor_now: 4 }).quality!;
     expect(q.text).toBe("40% con lag");
     expect(q.cls).toBe("bad");
-  });
-
-  it("oculta el túnel si no hay VPS", () => {
-    expect(health({ ...base, tunnel_up: null }, null).tunnel).toBeNull();
   });
 });
 

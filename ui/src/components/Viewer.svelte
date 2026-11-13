@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import Chat from "./Chat.svelte";
-  import { ChatConnection, errorText, viewersLabel } from "../lib/chat.svelte";
-  import { AuthError, authApi, dropToken, finishWebLogin, getToken, openUrl, startLogin } from "../lib/auth";
+  import { ChatConnection, errorText } from "../lib/chat.svelte";
+  import { AuthError, authApi, finishWebLogin, getToken, openUrl, startLogin } from "../lib/auth";
   import { Player } from "../lib/player";
-  import { LABELS, NetworkMonitor } from "../lib/quality.svelte";
+  import { NetworkMonitor } from "../lib/quality.svelte";
   import type { Me, ServerMsg, Ticket } from "../lib/types";
 
   // Espectador: se entra directo al directo. El nombre sale de la cuenta de
@@ -51,14 +51,13 @@
     mutedAutoplay: () => chat.sys("El navegador empezó el vídeo sin sonido: actívalo con el control de volumen del vídeo."),
   });
 
+  // No se le muestra al espectador: solo informa al streamer de cuántos van mal.
   const monitor = new NetworkMonitor({
     video: () => video ?? null,
     active: () => !!player.url,
     bandwidth: () => player.bandwidth(),
     report: (bandwidth, poor) => chat.send({ t: "quality_hint", bandwidth, poor }),
   });
-
-  const quality = $derived(live ? LABELS[monitor.level] : "");
 
   /** Token vigente, pidiendo uno nuevo si el que hay está por caducar. */
   async function videoAccess(): Promise<string | null> {
@@ -164,6 +163,7 @@
 
   function authNeeded(e: AuthError) {
     chat.forget();
+    account = null;
     setLive(false);
     placeholder = "";
     let msg = e.code === "not_member"
@@ -200,14 +200,6 @@
     }
   }
 
-  async function logout() {
-    await authApi(authUrl, "/api/logout", "POST").catch(() => {});
-    dropToken(authUrl);
-    account = null;
-    chat.drop();
-    authNeeded(new AuthError("session"));
-  }
-
   function onStall() {
     if (player.url) monitor.onStall();
   }
@@ -232,9 +224,15 @@
 <section id="live">
   <header>
     <span class="badge" class:on={live}>{live ? "EN VIVO" : "OFFLINE"}</span>
-    <span id="viewers">{viewersLabel(chat.viewers)}</span>
-    {#if quality}
-      <span class="quality-indicator quality-{monitor.level}" title={monitor.title}>{quality}</span>
+    <span id="viewers" title="Espectadores">{chat.viewers}</span>
+    {#if account}
+      <div class="account">
+        {#if account.sub}<span class="sub" title="Suscriptor">SUB</span>{/if}
+        <b>{account.name}</b>
+        {#if !account.sub && account.payments}
+          <button class="primary" onclick={subscribe}>Suscribirse · 2,99 $/mes</button>
+        {/if}
+      </div>
     {/if}
   </header>
   <div class="main">
@@ -261,17 +259,6 @@
         {/if}
       </div>
     </div>
-    <Chat {chat}>
-      {#if account}
-        <div class="account">
-          {#if account.sub}<span class="sub" title="Suscriptor">SUB</span>{/if}
-          <b>{account.name}</b>
-          {#if !account.sub && account.payments}
-            <button class="primary" onclick={subscribe}>Suscribirse · 2,99 $/mes</button>
-          {/if}
-          <button onclick={logout}>Salir de Discord</button>
-        </div>
-      {/if}
-    </Chat>
+    <Chat {chat} />
   </div>
 </section>

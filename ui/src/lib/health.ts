@@ -1,6 +1,6 @@
 import type { Status } from "./types";
 
-// Estado de la sesión del streamer, en píldoras para la cabecera.
+// Estado de la sesión del streamer, para la cabecera.
 
 export interface Pill {
   cls: string;
@@ -9,9 +9,6 @@ export interface Pill {
 }
 
 export interface Health {
-  obs: Pill;
-  rate: Pill;
-  tunnel: Pill | null;
   quality: Pill | null;
   uptime: string | null;
 }
@@ -21,26 +18,7 @@ export function fmtTime(ms: number): string {
   return (h ? `${h}:` : "") + `${String(m).padStart(h ? 2 : 1, "0")}:${String(s).padStart(2, "0")}`;
 }
 
-export function health(st: Status, prev: Status | null): Health {
-  const stale = st.live && st.now_ms - st.last_data_ms > 3000;
-  const obs: Pill = {
-    cls: st.live ? (stale ? "bad" : "ok") : "warn",
-    text: st.live ? (stale ? "OBS sin datos" : "OBS conectado") : "Esperando a OBS",
-    title: st.status,
-  };
-
-  let kbps = 0;
-  if (prev && st.now_ms > prev.now_ms && st.bytes_total >= prev.bytes_total)
-    kbps = ((st.bytes_total - prev.bytes_total) * 8) / (st.now_ms - prev.now_ms);
-  const rate: Pill = {
-    cls: !st.live ? "" : kbps > 0 ? "ok" : "warn",
-    text: st.live ? `${Math.round(kbps)} kbps` : "— kbps",
-  };
-
-  const tunnel: Pill | null = st.tunnel_up === null || st.tunnel_up === undefined
-    ? null
-    : { cls: st.tunnel_up ? "ok" : "bad", text: st.tunnel_up ? "VPS conectado" : "VPS caído", title: st.tunnel ?? "" };
-
+export function health(st: Status): Health {
   // Espectadores con problemas de conexión ahora mismo. La píldora solo
   // aparece si hay alguno: «todo bien» no es información que requiera sitio.
   const viewers = (st.viewers || 0) + (st.relay_viewers || 0);
@@ -58,7 +36,7 @@ export function health(st: Status, prev: Status | null): Health {
     };
   }
 
-  return { obs, rate, tunnel, quality, uptime: st.live_since ? fmtTime(st.now_ms - st.live_since) : null };
+  return { quality, uptime: st.live_since ? fmtTime(st.now_ms - st.live_since) : null };
 }
 
 /** El enlace de los espectadores: la web vive en el VPS, con el certificado de <ip-con-guiones>.sslip.io. */
