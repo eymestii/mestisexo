@@ -48,7 +48,7 @@
   const player = new Player({
     refresh: refreshVideo,
     unsupported: () => (placeholder = "Este navegador no puede reproducir el directo. Actualiza a iOS 17.1 o posterior, o usa otro navegador."),
-    mutedAutoplay: () => chat.sys("El navegador empezó el vídeo sin sonido: haz clic en el vídeo para activarlo. Doble clic, pantalla completa."),
+    mutedAutoplay: () => chat.sys("El navegador empezó el vídeo sin sonido: actívalo con el control de volumen del vídeo."),
   });
 
   const monitor = new NetworkMonitor({
@@ -208,37 +208,6 @@
     authNeeded(new AuthError("session"));
   }
 
-  // ---------- Gestos sobre el vídeo ----------
-  // Sin controles visibles: encima del vídeo no se dibuja nada. Un clic alterna
-  // el sonido, dos abren la pantalla completa. Un doble clic dispara también
-  // dos "click", así que el sonido se alterna con un pequeño retraso que el
-  // segundo clic cancela.
-  const DBLCLICK_MS = 250;
-  let clickTimer: ReturnType<typeof setTimeout> | undefined;
-  let playerBox = $state<HTMLDivElement>();
-
-  function onClick() {
-    clearTimeout(clickTimer);
-    clickTimer = setTimeout(() => {
-      const v = video!;
-      v.muted = !v.muted;
-      // Salir de silencio con el volumen a cero no se oiría.
-      if (!v.muted && v.volume === 0) v.volume = 1;
-      // Los navegadores no reproducen con sonido sin un gesto del usuario: este
-      // clic lo es, así que es el momento de reintentarlo.
-      if (!v.muted && v.paused) v.play().catch(() => {});
-    }, DBLCLICK_MS);
-  }
-
-  function onDblClick() {
-    clearTimeout(clickTimer);
-    const v = video as HTMLVideoElement & { webkitEnterFullscreen?: () => void };
-    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-    else if (playerBox?.requestFullscreen) playerBox.requestFullscreen().catch(() => {});
-    // iPhone no permite pantalla completa en un div, solo en el propio vídeo.
-    else v.webkitEnterFullscreen?.();
-  }
-
   function onStall() {
     if (player.url) monitor.onStall();
   }
@@ -270,14 +239,13 @@
   </header>
   <div class="main">
     <div class="left">
-      <div class="player" bind:this={playerBox}>
+      <div class="player">
         <video
           id="video"
           bind:this={video}
           autoplay
           playsinline
-          onclick={onClick}
-          ondblclick={onDblClick}
+          controls
           onwaiting={onStall}
           onstalled={onStall}
         ></video>

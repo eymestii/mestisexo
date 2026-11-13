@@ -28,7 +28,7 @@
 
 <aside class="chat">
   <div class="chat-head">
-    <b>Chat</b>
+    <b>Con el apoyo de <a href="https://roky.cloud" target="_blank" rel="noopener">roky.cloud</a></b>
   </div>
   {@render children?.()}
   <ul id="messages" bind:this={list}>

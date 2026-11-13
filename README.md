@@ -30,7 +30,7 @@ En la ventana del streamer aparece entonces una píldora con el porcentaje de la
 
 ## Reproductor del espectador
 
-Encima del vídeo no se dibuja nada: ni barra de progreso (en un directo no hay nada que buscar) ni controles. Un clic sobre el vídeo activa o silencia el sonido, y un doble clic abre la pantalla completa.
+El vídeo usa los controles normales del navegador: desde ahí se activa el sonido y se abre la pantalla completa.
 
 Safari (macOS y iPhone) reproduce HLS por sí mismo, que gasta menos batería y da pantalla completa nativa. Chrome y Firefox no traen HLS, así que ahí se usa [hls.js](https://github.com/video-dev/hls.js). Va empaquetado con la web, fijado a una versión exacta en `ui/package.json` y con su hash de integridad en `ui/package-lock.json`, para que la política de contenido siga siendo `'self'` y el directo no dependa de que un CDN de terceros responda. Va en su propio fichero y solo lo descargan los navegadores que lo necesitan.
 
