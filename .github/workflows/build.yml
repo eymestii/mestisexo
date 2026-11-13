@@ -12,14 +12,14 @@ jobs:
   vps:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -43,13 +43,13 @@ jobs:
             -C "$GITHUB_WORKSPACE/deploy" . \
             -C "$GITHUB_WORKSPACE/target" web
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: mestisexo-vps
           path: target/vps/*.tar.gz
 
       - name: Publicar en la release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: target/vps/*.tar.gz
