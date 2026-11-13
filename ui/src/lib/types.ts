@@ -38,7 +38,7 @@ export interface Ticket {
   video_exp?: number;
 }
 
-// Comandos de Tauri (app/src/main.rs y core::Status).
+// Comandos de Tauri (app/src/main.rs).
 export interface Keys {
   viewer_key: string;
   stream_key: string;
@@ -50,21 +50,4 @@ export interface HostSession {
   ws_port: number;
   key: string;
   host_token: string;
-}
-
-export interface Status {
-  live: boolean;
-  viewers: number;
-  chat_messages: number;
-  status: string;
-  tunnel: string | null;
-  tunnel_up: boolean | null;
-  live_since: number | null;
-  bytes_total: number;
-  frags_total: number;
-  last_data_ms: number;
-  now_ms: number;
-  relay_viewers?: number;
-  quality_poor_now: number;
-  quality_avg_bandwidth: number;
 }

@@ -32,10 +32,6 @@ header { display: flex; align-items: center; gap: 14px; height: var(--head); fle
 #placeholder { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); pointer-events: none; }
 
 header #viewers { margin-right: auto; }
-.pill { background: #2f2f35; border-radius: 999px; padding: 2px 10px; font-size: 12px; white-space: nowrap; }
-.pill.warn { background: #8a6d00; }
-.pill.bad { background: #8b1e1e; }
-#uptime { font-variant-numeric: tabular-nums; font-weight: 600; }
 
 .info { padding: 12px; display: flex; flex-direction: column; gap: 8px; }
 .info div { display: grid; grid-template-columns: 190px 1fr auto; gap: 10px; align-items: center; }

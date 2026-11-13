@@ -1964,7 +1964,7 @@ dependencies = [
 
 [[package]]
 name = "mestisexo"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "mestisexo-core",
  "serde",
@@ -1976,7 +1976,7 @@ dependencies = [
 
 [[package]]
 name = "mestisexo-auth"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -1992,7 +1992,7 @@ dependencies = [
 
 [[package]]
 name = "mestisexo-core"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "axum",
  "base64 0.22.1",

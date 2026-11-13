@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "../lib/tauri";
-  import { webLink } from "../lib/health";
+  import { webLink } from "../lib/link";
   import type { HostSession, Keys } from "../lib/types";
 
   let { onstart }: { onstart: (s: HostSession) => void } = $props();
