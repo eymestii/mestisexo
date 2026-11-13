@@ -74,8 +74,9 @@ async fn el_reproductor_descarga_todo_lo_anunciado() {
 async fn la_recarga_bloqueante_espera_a_la_parte() {
     let frames = t::split_frames(&sample_mp4(6));
     let hls = Packager::new();
-    // Solo el init y el primer tramo: la parte que se pedirá no existe aún.
-    let primeras = 6;
+    // El init y el primer tramo, el justo para que el origen ya sirva la
+    // playlist (mide unas partes antes): la parte que se pedirá no existe aún.
+    let primeras = 12;
     for (k, d) in frames.iter().take(primeras) {
         hls.push_frame(*k, d);
     }

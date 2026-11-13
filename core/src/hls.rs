@@ -40,8 +40,19 @@ use tokio::sync::watch;
 
 /// Duración nominal de cada parte: la de los fragmentos que genera ffmpeg.
 const PART_TARGET: f64 = 0.25;
+/// Partes normales que se miden antes de fijar `PART-TARGET` (unos 2 s, para
+/// ver todas las duraciones que alterna ffmpeg). Si luego llega una parte más
+/// larga, solo su segmento se queda sin partes.
+const PART_SAMPLES: usize = 8;
+/// Antes de fijar `PART-TARGET`, una parte que pase de esto es anormal (la del
+/// arranque del encoder llega a durar 0,7 s) y no cuenta para medirlo.
+const PART_ODD: f64 = PART_TARGET * 1.5;
 /// Un segmento se cierra en el primer keyframe a partir de esta duración.
 const SEG_TARGET: f64 = 2.0;
+/// `TARGETDURATION` mínimo. Se anuncia con margen desde la primera playlist
+/// porque el primer segmento de cada directo dura algo más de 3 s y el valor
+/// no puede cambiar durante la emisión.
+const TARGET_MIN: f64 = 4.0;
 /// Segmentos que se mantienen descargables. Las partes de los más antiguos
 /// siguen disponibles aunque ya no aparezcan en la playlist, como pide la
 /// especificación (tres duraciones de segmento desde el borde del directo).
@@ -63,6 +74,9 @@ struct Seg {
     msn: u64,
     parts: Vec<Part>,
     dur: f64,
+    /// Tiene una parte más larga que `PART-TARGET`: se publica solo entero,
+    /// porque anunciar sus partes rompería la playlist.
+    no_parts: bool,
     /// Concatenación de las partes, una vez cerrado el segmento.
     data: Option<Bytes>,
 }
@@ -78,11 +92,16 @@ struct Inner {
     timescale: u32,
     segs: VecDeque<Seg>,
     next_msn: u64,
-    /// Parte más larga vista. Se anuncia esto como `PART-TARGET` porque la
-    /// especificación no permite que ninguna parte lo supere, y ffmpeg entrega
-    /// fragmentos algo más largos que los 0,25 s pedidos (los corta en el
-    /// siguiente fotograma, no en el instante exacto).
-    max_part: f64,
+    /// Duraciones de las primeras partes normales, para fijar `PART-TARGET`.
+    samples: Vec<f64>,
+    /// `PART-TARGET` del directo: la parte normal más larga de las medidas al
+    /// empezar. No cambia hasta la señal siguiente, porque Safari rechaza la
+    /// playlist si cambia o si no encaja con las partes (`err=4`, «formato no
+    /// soportado»). ffmpeg entrega fragmentos algo más largos que los 0,25 s
+    /// pedidos (los corta en el siguiente fotograma), así que hay que medirlo.
+    part_target: Option<f64>,
+    /// `TARGETDURATION` anunciado. Solo sube, y solo si un segmento no cabe.
+    target: f64,
     /// Playlist ya renderizada; se descarta en cada cambio.
     rendered: Option<String>,
 }
@@ -98,6 +117,18 @@ impl Inner {
             Some(s) => idx.is_none_or(|i| i < s.parts.len()),
             None => false,
         }
+    }
+
+    /// Como `has_part`, pero solo si la playlist ya lo anuncia: las partes de
+    /// un segmento sin partes no aparecen hasta que se cierra entero.
+    fn announces(&self, msn: u64, idx: Option<usize>) -> bool {
+        self.segs.iter().find(|s| s.msn == msn).is_some_and(|s| !s.no_parts || s.data.is_some()) && self.has_part(msn, idx)
+    }
+
+    /// Hay playlist que servir: `PART-TARGET` ya está medido y hay algo que
+    /// anunciar. Antes, el reproductor espera como en la recarga bloqueante.
+    fn ready(&self) -> bool {
+        self.part_target.is_some() && self.segs.iter().any(|s| s.data.is_some() || (!s.no_parts && !s.parts.is_empty()))
     }
 
     fn part(&self, msn: u64, idx: usize) -> Option<Bytes> {
@@ -124,6 +155,10 @@ impl Inner {
 
     fn push_part(&mut self, data: Bytes, independent: bool) {
         let dur = self.frag_dur(&data);
+        self.add_part(data, dur, independent);
+    }
+
+    fn add_part(&mut self, data: Bytes, dur: f64, independent: bool) {
         // Un segmento tiene que empezar en keyframe, así que solo se corta ahí.
         let close = independent && self.segs.back().is_some_and(|s| s.dur >= SEG_TARGET - PART_TARGET / 2.0);
         if close {
@@ -136,12 +171,21 @@ impl Inner {
             }
             let msn = self.next_msn;
             self.next_msn += 1;
-            self.segs.push_back(Seg { msn, parts: Vec::new(), dur: 0.0, data: None });
+            self.segs.push_back(Seg { msn, parts: Vec::new(), dur: 0.0, no_parts: false, data: None });
+        }
+        // Una parte que no cabe en PART-TARGET deja su segmento sin partes.
+        let limit = self.part_target.unwrap_or(PART_ODD);
+        if self.part_target.is_none() && dur <= limit {
+            self.samples.push(dur);
+            if self.samples.len() >= PART_SAMPLES {
+                let max = self.samples.iter().copied().fold(0.0, f64::max);
+                self.part_target = Some((max * 1000.0).ceil() / 1000.0);
+            }
         }
         let seg = self.segs.back_mut().expect("hay segmento abierto");
         seg.dur += dur;
+        seg.no_parts |= dur > limit;
         seg.parts.push(Part { data, dur, independent });
-        self.max_part = self.max_part.max(dur);
         while self.segs.len() > KEEP_SEGMENTS {
             self.segs.pop_front();
         }
@@ -163,11 +207,11 @@ impl Inner {
         if let Some(p) = &self.rendered {
             return p.clone();
         }
-        let target = self.segs.iter().map(|s| s.dur).fold(SEG_TARGET, f64::max).ceil().max(1.0);
+        let seg_max = self.segs.iter().map(|s| s.dur).fold(SEG_TARGET, f64::max).ceil();
+        self.target = self.target.max(TARGET_MIN).max(seg_max);
+        let target = self.target;
         let first = self.segs.front().map(|s| s.msn).unwrap_or(0);
-        // Ninguna parte puede durar más que PART-TARGET, así que se anuncia lo
-        // medido y no los 0,25 s nominales.
-        let part_target = (self.max_part.max(PART_TARGET) * 1000.0).ceil() / 1000.0;
+        let part_target = self.part_target.unwrap_or(PART_TARGET);
         let mut m = String::with_capacity(1024);
         m.push_str("#EXTM3U\n#EXT-X-VERSION:9\n");
         m.push_str(&format!("#EXT-X-TARGETDURATION:{target:.0}\n"));
@@ -185,7 +229,7 @@ impl Inner {
 
         let parts_from = self.segs.len().saturating_sub(PART_SEGMENTS);
         for (i, s) in self.segs.iter().enumerate() {
-            if i >= parts_from {
+            if i >= parts_from && !s.no_parts {
                 for (j, p) in s.parts.iter().enumerate() {
                     m.push_str(&format!("#EXT-X-PART:DURATION={:.5},URI=\"part/{}/{}.m4s\"", p.dur, s.msn, j));
                     m.push_str(if p.independent { ",INDEPENDENT=YES\n" } else { "\n" });
@@ -196,8 +240,9 @@ impl Inner {
             }
         }
         // La parte que todavía se está grabando: el reproductor la pide ya y el
-        // origen le responde en cuanto ffmpeg la entrega.
-        if let Some(s) = self.segs.back() {
+        // origen le responde en cuanto ffmpeg la entrega. Si el segmento abierto
+        // va sin partes, lo siguiente que se anunciará es el propio segmento.
+        if let Some(s) = self.segs.back().filter(|s| !(s.no_parts && s.data.is_none())) {
             let next = if s.data.is_some() { (s.msn + 1, 0) } else { (s.msn, s.parts.len()) };
             m.push_str(&format!("#EXT-X-PRELOAD-HINT:TYPE=PART,URI=\"part/{}/{}.m4s\"\n", next.0, next.1));
         }
@@ -401,12 +446,22 @@ async fn playlist(State(hls): State<Arc<Hls>>, Path(session): Path<String>, Quer
         return if hls.lock().session == session { deny() } else { gone() };
     }
     // Recarga bloqueante: el reproductor dice qué parte espera y la respuesta
-    // se retiene hasta que existe, en vez de contestar «todavía no».
+    // se retiene hasta que existe, en vez de contestar «todavía no». La
+    // primera playlist también espera, a que PART-TARGET esté medido.
     if let Some(msn) = q.msn {
-        hls.wait(|st| st.has_part(msn, q.part) || st.live_msn().is_some_and(|l| l > msn)).await;
+        hls.wait(|st| st.announces(msn, q.part) || st.live_msn().is_some_and(|l| l > msn)).await;
+    } else {
+        hls.wait(Inner::ready).await;
     }
     let (body, session_now) = {
         let mut st = hls.lock();
+        if st.session != session {
+            return gone();
+        }
+        if !st.ready() {
+            // Recién empezada la señal: que el reproductor vuelva a pedirla.
+            return (StatusCode::SERVICE_UNAVAILABLE, [(header::CACHE_CONTROL, "no-store"), (header::RETRY_AFTER, "1")]).into_response();
+        }
         (st.playlist(), st.session.clone())
     };
     if session_now != session {
@@ -518,6 +573,17 @@ impl Packager {
         frame.extend_from_slice(&[kind]);
         frame.extend_from_slice(data);
         self.0.push(&frame.freeze()).is_some()
+    }
+
+    /// Entrega un fragmento como si durase `dur` segundos, para simular la
+    /// parte larga con la que arranca el encoder.
+    pub fn push_frame_dur(&self, kind: u8, data: &[u8], dur: f64) {
+        let mut st = self.0.lock();
+        if st.init.is_some() {
+            st.add_part(Bytes::copy_from_slice(data), dur, kind == FRAG_KEY);
+        }
+        drop(st);
+        self.0.wake();
     }
 
     pub fn end(&self) {

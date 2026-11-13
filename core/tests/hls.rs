@@ -169,7 +169,48 @@ fn el_token_caducado_no_vale() {
     assert!(!mestisexo_core::testing::token_ok(secret, Some(&format!("{payload}.{}", otro.split_once('.').unwrap().1))));
 }
 
+#[test]
+fn la_parte_larga_del_arranque_no_cambia_part_target() {
+    // OBS tarda en estabilizarse y la primera parte de cada directo llega a
+    // durar 0,686 s. Antes eso subía PART-TARGET para toda la emisión y Safari
+    // rechazaba la playlist (err=4) aunque Chrome y Firefox la aceptaran.
+    let frames = mestisexo_core::testing::split_frames(&sample_mp4(12));
+    let hls = mestisexo_core::testing::Packager::new();
+    hls.push_frame(frames[0].0, &frames[0].1);
+    let primer_key = frames.iter().position(|(k, _)| *k == mestisexo_core::testing::FRAG_KEY).expect("hay keyframe");
+    hls.push_frame_dur(frames[primer_key].0, &frames[primer_key].1, 0.686);
+
+    let mut vistos = std::collections::BTreeSet::new();
+    let mut primer_msn = None;
+    for (kind, data) in frames.iter().skip(primer_key + 1) {
+        hls.push_frame(*kind, data);
+        let m = hls.playlist();
+        let pt = cabecera(&m, "#EXT-X-PART-INF:PART-TARGET=");
+        let td = cabecera(&m, "#EXT-X-TARGETDURATION:");
+        // Hasta medir las partes normales el origen no sirve la playlist; desde
+        // ahí, los dos valores no pueden moverse.
+        if m.lines().any(|l| l.starts_with("#EXT-X-PART:")) {
+            vistos.insert((pt.clone(), td.clone()));
+            let anunciado: f64 = pt.parse().unwrap();
+            assert!(anunciado < 0.3, "PART-TARGET inflado por la parte del arranque: {anunciado}");
+            for d in duraciones(&m) {
+                assert!(d <= anunciado, "parte de {d}s con PART-TARGET={anunciado}s:\n{m}");
+            }
+        }
+        primer_msn = primer_msn.or_else(|| segmentos(&m).first().copied());
+        if let Some(msn) = primer_msn {
+            assert!(!partes(&m).iter().any(|(s, _)| *s == msn), "el segmento con la parte larga no debe anunciar partes:\n{m}");
+        }
+    }
+    assert_eq!(primer_msn, Some(0), "el primer segmento debe publicarse entero");
+    assert_eq!(vistos.len(), 1, "PART-TARGET y TARGETDURATION deben quedarse fijos: {vistos:?}");
+}
+
 // ---------- Lectura de la playlist ----------
+
+fn cabecera(m: &str, tag: &str) -> String {
+    m.lines().find_map(|l| l.strip_prefix(tag)).unwrap_or_else(|| panic!("falta {tag}")).to_string()
+}
 
 fn attr(line: &str, key: &str) -> Option<String> {
     let i = line.find(key)? + key.len();
