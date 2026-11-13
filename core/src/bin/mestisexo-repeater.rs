@@ -1,5 +1,6 @@
 //! Repetidor para el VPS: `mestisexo-repeater [--listen 127.0.0.1:8090] [--hls-listen 127.0.0.1:8094]
-//! [--upstream 127.0.0.1:8091] [--max-viewers 500] [--auth-internal 127.0.0.1:8093 --auth-url https://…]`
+//! [--upstream 127.0.0.1:8091] [--max-viewers 500] [--auth-internal 127.0.0.1:8093 --auth-url https://…]
+//! [--events-listen 127.0.0.1:8095 [--events-grace 60]]`
 //!
 //! El vídeo sale por `--hls-listen` como LL-HLS, que Caddy (y cualquier CDN
 //! delante) puede cachear. Por `--listen` solo va el chat, por WebSocket.
@@ -13,8 +14,11 @@ fn main() {
         max_viewers: 500,
         auth: None,
         hls_secret: None,
+        events: None,
     };
     let (mut auth_internal, mut auth_url) = (None, None);
+    let mut events_listen: Option<SocketAddr> = None;
+    let mut grace = std::time::Duration::from_secs(60);
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         let v = args.next().unwrap_or_else(|| usage(&format!("falta el valor de {a}")));
@@ -25,6 +29,8 @@ fn main() {
             "--max-viewers" => cfg.max_viewers = v.parse().unwrap_or_else(|_| usage("--max-viewers inválido")),
             "--auth-internal" => auth_internal = Some(v.parse().unwrap_or_else(|_| usage("--auth-internal inválido"))),
             "--auth-url" if v.starts_with("https://") => auth_url = Some(v.trim_end_matches('/').to_string()),
+            "--events-listen" => events_listen = Some(v.parse().unwrap_or_else(|_| usage("--events-listen inválido"))),
+            "--events-grace" => grace = std::time::Duration::from_secs(v.parse().unwrap_or_else(|_| usage("--events-grace inválido (segundos)"))),
             _ => usage(&format!("opción desconocida: {a}")),
         }
     }
@@ -45,6 +51,16 @@ fn main() {
     if cfg.hls_secret.is_none() && cfg.auth.is_some() {
         eprintln!("Aviso: sin HLS_SECRET el chat pide cuenta de Discord pero el vídeo queda accesible a quien tenga la URL.");
     }
+    // Igual que HLS_SECRET: el token del bot llega por el entorno. Si falta, se
+    // avisa y se sigue sin avisos: el directo no depende de ellos.
+    if let Some(listen) = events_listen {
+        let token = std::env::var("EVENTS_TOKEN").ok().map(|s| s.trim().to_string()).unwrap_or_default();
+        if token.len() < 32 {
+            eprintln!("Aviso: --events-listen sin EVENTS_TOKEN de al menos 32 caracteres; los avisos del directo quedan desactivados.");
+        } else {
+            cfg.events = Some(mestisexo_core::EventsConfig { listen, token, grace });
+        }
+    }
     // Multihilo: cada espectador es una tarea y el reparto se distribuye entre
     // los núcleos del VPS. Con un solo hilo el techo era ~700 espectadores por
     // mucho que el VPS tuviera 4 núcleos, porque tres quedaban sin usar.
@@ -56,6 +72,6 @@ fn main() {
 }
 
 fn usage(msg: &str) -> ! {
-    eprintln!("{msg}\nUso: mestisexo-repeater [--listen IP:PUERTO] [--hls-listen IP:PUERTO] [--upstream IP:PUERTO] [--max-viewers N] [--auth-internal IP:PUERTO --auth-url https://…]\nEntorno: HLS_SECRET firma el acceso al vídeo (la misma clave que el servicio de cuentas).");
+    eprintln!("{msg}\nUso: mestisexo-repeater [--listen IP:PUERTO] [--hls-listen IP:PUERTO] [--upstream IP:PUERTO] [--max-viewers N] [--auth-internal IP:PUERTO --auth-url https://…] [--events-listen IP:PUERTO [--events-grace SEGUNDOS]]\nEntorno: HLS_SECRET firma el acceso al vídeo (la misma clave que el servicio de cuentas). EVENTS_TOKEN autoriza al bot en /events.");
     std::process::exit(2);
 }

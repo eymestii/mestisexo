@@ -1,0 +1,30 @@
+[Unit]
+Description=Mestisexo: avisos del directo en Discord
+After=network-online.target mestisexo-repeater.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/lib/mestisexo/mestisexo-notify.py
+# El mismo EVENTS_TOKEN que el repetidor, y el webhook del canal.
+EnvironmentFile=/etc/mestisexo/events.env
+EnvironmentFile=/etc/mestisexo/notify.env
+Environment=STREAM_URL=https://109-123-252-126.sslip.io/
+Environment=PYTHONUNBUFFERED=1
+# Ahí guarda qué directo anunció ya, para no repetir avisos al reiniciar.
+StateDirectory=mestisexo-notify
+Restart=always
+RestartSec=5
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=64M
+
+[Install]
+WantedBy=multi-user.target

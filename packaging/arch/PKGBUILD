@@ -1,7 +1,7 @@
 # Módulo del streamer para Arch Linux. Compila desde este repositorio:
 #   cd packaging/arch && makepkg -si
 pkgname=mestisexo
-pkgver=0.6.3
+pkgver=0.7.0
 pkgrel=1
 pkgdesc="Streamer de Mestisexo: recibe OBS y lo envía al VPS"
 arch=(x86_64)

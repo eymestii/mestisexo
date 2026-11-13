@@ -11,12 +11,14 @@
 //! - El chat vive solo en memoria: se limita a `MAX_HISTORY` mensajes y se
 //!   borra al terminar la sesión.
 
+mod events;
 mod hls;
 mod repeater;
 mod tunnel;
 mod video;
 mod ws;
 
+pub use events::EventsConfig;
 pub use hls::sign_token;
 pub use repeater::{run as run_repeater, Auth as RepeaterAuth, RepeaterConfig};
 pub use tunnel::Tunnel;
@@ -223,6 +225,8 @@ pub(crate) struct Shared {
     pub auth: Option<repeater::Auth>,
     /// En el repetidor, origen LL-HLS del que tiran los espectadores.
     pub hls: Option<Arc<hls::Hls>>,
+    /// En el repetidor, avisos de inicio y fin del directo para el bot.
+    pub events: Option<Arc<events::Events>>,
 }
 
 impl Shared {
@@ -238,6 +242,7 @@ impl Shared {
             upstream: Mutex::new(None),
             auth,
             hls: None,
+            events: None,
         })
     }
 

@@ -76,6 +76,7 @@ async fn del_streamer_al_espectador() {
         max_viewers: 10,
         auth: None,
         hls_secret: Some(secret.clone()),
+        events: None,
     };
     tokio::spawn(mestisexo_core::run_repeater(cfg));
 

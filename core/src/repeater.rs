@@ -63,6 +63,8 @@ pub struct RepeaterConfig {
     /// Clave compartida con el servicio de cuentas para firmar el acceso al
     /// vídeo. Sin ella, los segmentos son públicos para quien sepa la URL.
     pub hls_secret: Option<Vec<u8>>,
+    /// Avisos de inicio y fin del directo (SSE) para un bot de Discord.
+    pub events: Option<crate::EventsConfig>,
 }
 
 /// Servicio de cuentas (`mestisexo-auth`) en el mismo VPS.
@@ -107,15 +109,27 @@ pub async fn run(cfg: RepeaterConfig) -> io::Result<()> {
     let public = TcpListener::bind(cfg.listen).await?;
     let hls_l = TcpListener::bind(cfg.hls_listen).await?;
     let upstream = TcpListener::bind(cfg.upstream).await?;
+    let events = match &cfg.events {
+        Some(e) => Some((TcpListener::bind(e.listen).await?, crate::events::Events::new(e.token.clone(), e.grace))),
+        None => None,
+    };
     let hls = crate::hls::Hls::new(cfg.hls_secret);
     let mut shared = Shared::new(String::new(), cfg.max_viewers, true, "Esperando al streamer…", cfg.auth.clone());
-    Arc::get_mut(&mut shared).expect("sin clones todavía").hls = Some(hls.clone());
+    {
+        let sh = Arc::get_mut(&mut shared).expect("sin clones todavía");
+        sh.hls = Some(hls.clone());
+        sh.events = events.as_ref().map(|(_, ev)| ev.clone());
+    }
     tokio::spawn(ws::serve(public, shared.clone()));
     tokio::spawn(crate::hls::serve(hls_l, hls));
     eprintln!(
         "Repetidor: chat en {}, vídeo en {}, streamer en {}",
         cfg.listen, cfg.hls_listen, cfg.upstream
     );
+    if let Some((l, ev)) = events {
+        eprintln!("Avisos del directo en {}/events", cfg.events.as_ref().map(|e| e.listen.to_string()).unwrap_or_default());
+        tokio::spawn(crate::events::serve(l, ev));
+    }
 
     // Solo un streamer a la vez: si entra uno nuevo (p. ej. tras un corte), sustituye al anterior.
     let mut current: Option<tokio::task::JoinHandle<()>> = None;
@@ -195,6 +209,9 @@ async fn upstream_session(shared: &Arc<Shared>, stream: TcpStream) -> io::Result
                 if let Some(path) = started {
                     st.hls = Some(path.clone());
                     shared.send_json(serde_json::json!({ "t": "live", "hls": path }));
+                    if let Some(ev) = &shared.events {
+                        ev.live();
+                    }
                 }
                 drop(st);
                 received += 1;
@@ -264,6 +281,10 @@ fn on_event(shared: &Shared, v: &serde_json::Value, raw: &[u8]) {
             if let Some(hls) = &shared.hls {
                 hls.end();
             }
+            // OBS se ha parado, pero puede volver enseguida: lo decide el margen.
+            if let Some(ev) = &shared.events {
+                ev.offline(false);
+            }
         }
         Some("end") => {
             st.codec = None;
@@ -272,6 +293,10 @@ fn on_event(shared: &Shared, v: &serde_json::Value, raw: &[u8]) {
             st.key.clear();
             if let Some(hls) = &shared.hls {
                 hls.end();
+            }
+            // El streamer ha pulsado «Salir»: el directo termina ya.
+            if let Some(ev) = &shared.events {
+                ev.offline(true);
             }
             let _ = shared.tx.send(Out::Text(String::from_utf8_lossy(raw).into()));
             let _ = shared.tx.send(Out::Kick);
@@ -296,6 +321,10 @@ fn upstream_gone(shared: &Shared) {
         }
         // La clave y el chat se mantienen: si el streamer vuelve, se sigue igual.
         shared.send_json(serde_json::json!({ "t": "offline" }));
+    }
+    // Fuera del `if`: aunque no constara el códec, si hubo señal hay que cerrarla.
+    if let Some(ev) = &shared.events {
+        ev.offline(false);
     }
 }
 

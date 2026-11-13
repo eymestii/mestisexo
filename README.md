@@ -75,13 +75,16 @@ Cada release incluye `mestisexo-vps-x86_64-linux.tar.gz` con los binarios estát
 ```sh
 mkdir -p /tmp/mestisexo && tar -xzf mestisexo-vps-x86_64-linux.tar.gz -C /tmp/mestisexo && cd /tmp/mestisexo
 install -m 755 mestisexo-repeater mestisexo-auth /usr/local/bin/
-install -m 644 mestisexo-repeater.service mestisexo-auth.service /etc/systemd/system/
+install -m 644 mestisexo-repeater.service mestisexo-auth.service mestisexo-notify.service /etc/systemd/system/
+install -D -m 755 mestisexo-notify.py /usr/local/lib/mestisexo/mestisexo-notify.py
 install -D -m 644 10-discord.conf /etc/systemd/system/mestisexo-repeater.service.d/10-discord.conf
 install -m 644 50-mestisexo-stream.conf /etc/ssh/sshd_config.d/
 install -m 644 Caddyfile /etc/caddy/Caddyfile
 rm -rf /srv/mestisexo/web && mkdir -p /srv/mestisexo && cp -r web /srv/mestisexo/web
 # Clave que firma el acceso al vídeo. Solo la primera vez.
 mkdir -p /etc/mestisexo && umask 077 && printf 'HLS_SECRET=%s\n' "$(openssl rand -base64 48)" > /etc/mestisexo/hls.env
+# Token del bot de avisos. Solo la primera vez.
+(umask 077 && printf 'EVENTS_TOKEN=%s\n' "$(openssl rand -hex 32)" > /etc/mestisexo/events.env)
 systemctl daemon-reload && systemctl enable --now mestisexo-auth mestisexo-repeater
 sshd -t && systemctl reload ssh && systemctl reload caddy
 ufw allow 80/tcp && ufw allow 443/tcp
@@ -93,7 +96,24 @@ En `~stream/.ssh/authorized_keys`, la línea de la clave debe permitir solo la c
 restrict,port-forwarding,permitopen="127.0.0.1:8091" ssh-ed25519 AAAA… mestisexo
 ```
 
-Todo escucha solo en `127.0.0.1`: el repetidor en `8090` (chat, a través de Caddy en `/ws`), `8091` (streamer, solo accesible por SSH) y `8094` (vídeo LL-HLS, a través de Caddy en `/hls/*`), y el servicio de cuentas en `8092` (público, a través de Caddy) y `8093` (interno). Desde fuera solo están abiertos el 80 y el 443.
+Todo escucha solo en `127.0.0.1`: el repetidor en `8090` (chat, a través de Caddy en `/ws`), `8091` (streamer, solo accesible por SSH), `8094` (vídeo LL-HLS, a través de Caddy en `/hls/*`) y `8095` (avisos para el bot de Discord, solo local), y el servicio de cuentas en `8092` (público, a través de Caddy) y `8093` (interno). Desde fuera solo están abiertos el 80 y el 443.
+
+### Avisos del directo en Discord (VPS)
+
+El servicio `mestisexo-notify` publica en un canal de Discord cuándo empieza y cuándo termina el directo, con el enlace y la duración.
+
+- El repetidor ofrece `GET /events` en `127.0.0.1:8095` (Server-Sent Events). La conexión queda abierta: al conectar llega el estado actual y después un evento en cada cambio, más un keep-alive cada 15 s. No hay sondeo.
+- Pide `Authorization: Bearer <EVENTS_TOKEN>`. El token está en `/etc/mestisexo/events.env` (root, 600; plantilla en `deploy/events.env.example`) y lo leen el repetidor y el bot. Sin token válido, el repetidor arranca igual pero sin avisos.
+- Un corte del túnel o reiniciar OBS no cuenta como fin: el «offline» solo se publica si la señal no vuelve en 60 s (`--events-grace`). Al pulsar «Salir» en la app termina al momento.
+- Cada directo se identifica por su hora de inicio, así que si el bot se reconecta o se reinicia no repite avisos.
+- El bot (`deploy/mestisexo-notify.py`) solo usa la biblioteca estándar de Python 3 y reintenta con Discord hasta 15 min si responde 429 o 5xx.
+
+Para activarlo, crea un webhook en el canal (Editar canal → Integraciones → Webhooks) y, en el VPS:
+
+```sh
+(umask 077 && printf 'DISCORD_WEBHOOK_URL=%s\n' 'https://discord.com/api/webhooks/…' > /etc/mestisexo/notify.env)
+systemctl restart mestisexo-repeater && systemctl enable --now mestisexo-notify
+```
 
 ### Cuentas de Discord y suscripciones (VPS)
 
