@@ -8,6 +8,14 @@
   let text = $state("");
   let stick = true;
 
+  // Atajos que se expanden al enviar, solo como palabra suelta: «rip» sí,
+  // «ripio» o «rip.com» no. El servidor recibe texto normal.
+  const SHORTCUTS: Record<string, string> = {
+    gg: "GG 🎮", wp: "WP 💪", lol: "LOL 😂", oof: "OOF 💀", hype: "HYPE 🔥", rip: "RIP ⚰️",
+  };
+  const SHORTCUT_RE = /(?<![\p{L}\p{N}_.\/:@#-])(gg|wp|lol|oof|hype|rip)(?![\p{L}\p{N}_\/:@#-]|\.[\p{L}\p{N}])/giu;
+  const expand = (s: string) => s.replace(SHORTCUT_RE, (w) => SHORTCUTS[w.toLowerCase()]);
+
   // Solo se baja al último mensaje si ya se estaba abajo: quien sube a leer no
   // pierde el sitio.
   $effect.pre(() => {
@@ -21,7 +29,10 @@
 
   function submit(e: SubmitEvent) {
     e.preventDefault();
-    const t = text.trim();
+    const raw = text.trim();
+    // El servidor corta a 300 caracteres: si al expandir se pasa, va tal cual.
+    let t = expand(raw);
+    if ([...t].length > 300) t = raw;
     if (t && chat.send({ t: "chat", text: t })) text = "";
   }
 </script>
@@ -46,6 +57,6 @@
   </ul>
   <form id="chat-form" onsubmit={submit}>
     <input bind:value={text} maxlength="300" placeholder="Escribe un mensaje" autocomplete="off">
-    <button>Enviar</button>
+    <button class="send">Enviar</button>
   </form>
 </aside>

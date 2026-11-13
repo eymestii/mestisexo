@@ -59,6 +59,8 @@ header #viewers { margin-right: auto; }
 #messages .host .n::after { content: " ★"; color: var(--accent); }
 #messages .sys { color: var(--muted); font-style: italic; }
 #chat-form { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); }
+#chat-form .send { background: #f60; color: #fff; font-weight: 600; }
+#chat-form .send:hover { background: #ff7a1f; }
 #messages .sub, .account .sub { background: var(--accent); color: #fff; border-radius: 3px; padding: 0 4px; margin-right: 4px; font-size: 10px; font-weight: 700; vertical-align: 1px; }
 .login { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: rgba(0, 0, 0, .85); text-align: center; padding: 20px; }
 .login button.primary { background: #5865f2; }
