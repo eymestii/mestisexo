@@ -7,11 +7,14 @@ pkgdesc="Streamer de Mestisexo: recibe OBS y lo envía al VPS"
 arch=(x86_64)
 license=(custom)
 depends=(webkit2gtk-4.1 gst-plugins-base gst-plugins-good gst-libav ffmpeg openssh)
-makedepends=(rust)
+makedepends=(rust npm)
 options=(!lto !debug)
 
 build() {
-  cd "$startdir/../.."
+  cd "$startdir/../../ui"
+  npm ci
+  npm run build
+  cd ..
   cargo build --release --locked -p mestisexo --target-dir "$srcdir/target"
 }
 

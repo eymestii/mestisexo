@@ -32,7 +32,7 @@ En la ventana del streamer aparece entonces una píldora con el porcentaje de la
 
 Encima del vídeo no se dibuja nada: ni barra de progreso (en un directo no hay nada que buscar) ni controles. Un clic sobre el vídeo activa o silencia el sonido, y un doble clic abre la pantalla completa.
 
-Safari (macOS y iPhone) reproduce HLS por sí mismo, que gasta menos batería y da pantalla completa nativa. Chrome y Firefox no traen HLS, así que ahí se carga [hls.js](https://github.com/video-dev/hls.js) desde `ui/vendor/hls.min.js`. Va en el repositorio, con su checksum anotado en `ui/vendor/README.md`, para que la política de contenido siga siendo `'self'` y el directo no dependa de que un CDN de terceros responda.
+Safari (macOS y iPhone) reproduce HLS por sí mismo, que gasta menos batería y da pantalla completa nativa. Chrome y Firefox no traen HLS, así que ahí se usa [hls.js](https://github.com/video-dev/hls.js). Va empaquetado con la web, fijado a una versión exacta en `ui/package.json` y con su hash de integridad en `ui/package-lock.json`, para que la política de contenido siga siendo `'self'` y el directo no dependa de que un CDN de terceros responda. Va en su propio fichero y solo lo descargan los navegadores que lo necesitan.
 
 La latencia queda en **1,5-2,5 s**, frente a los 0,5 s del reparto por WebSocket. Es el precio de que el vídeo sea cacheable. El margen por detrás del directo ya no lo lleva esta página: lo gobierna la playlist (`PART-HOLD-BACK`) y lo gestiona el reproductor, que se retrasa solo si la red de ese espectador no da y vuelve a acercarse cuando puede.
 
@@ -42,7 +42,24 @@ La latencia queda en **1,5-2,5 s**, frente a los 0,5 s del reparto por WebSocket
 cd packaging/arch && makepkg -si
 ```
 
-Depende de `webkit2gtk-4.1`, `gst-plugins-base`, `gst-plugins-good`, `gst-libav`, `ffmpeg` y `openssh`. Para probar sin instalar: `cargo build --release -p mestisexo`.
+Depende de `webkit2gtk-4.1`, `gst-plugins-base`, `gst-plugins-good`, `gst-libav`, `ffmpeg` y `openssh`; para compilar, además, `rust` y `npm`. Para probar sin instalar: `cargo tauri build --no-bundle` (compila la interfaz y la app), o `cargo tauri dev` para desarrollar con recarga en caliente.
+
+## Interfaz (`ui/`)
+
+La misma interfaz sirve para la ventana del streamer (Tauri) y para la web de los espectadores. Está hecha con Svelte 5 y TypeScript, y Vite la compila a ficheros estáticos en `ui/dist/`, que es lo que se instala en el VPS.
+
+```sh
+cd ui
+npm ci
+npm run dev      # http://localhost:5173, con recarga en caliente
+npm run check    # tipos y avisos de Svelte
+npm test         # pruebas de la lógica (vitest)
+npm run build    # genera ui/dist/
+```
+
+`npm run dev` reenvía `/ws`, `/hls`, `/api` y `/login` a un repetidor y un servicio de cuentas locales (puertos 8090, 8094 y 8092). Con `MESTISEXO_BACKEND=https://109-123-252-126.sslip.io npm run dev` usa los del VPS, aunque el inicio de sesión con Discord solo vuelve al dominio real.
+
+Cada pantalla va en su propio fichero: el espectador no descarga el código del streamer, ni el streamer el reproductor. Los ficheros de `assets/` llevan un hash del contenido en el nombre, así que Caddy los sirve como inmutables y cada versión nueva se descarga sola.
 
 1. Abre Mestisexo, rellena «VPS» (`stream@109.123.252.126`) y «Clave SSH» (`~/.ssh/mestisexo_tunnel`), y pulsa **Iniciar sesión**.
 2. En OBS: *Ajustes → Emisión → Servicio: Personalizado*. Pega el servidor y la clave de stream.
@@ -89,7 +106,7 @@ Con el servicio `mestisexo-auth`, solo pueden ver el stream los miembros de tu s
 - La web inicia sesión con Discord, que devuelve un código a la propia página. La página solo lo acepta si coincide con el `state` que guardó antes de salir. Para cada conexión al chat pide un ticket de un solo uso, que el repetidor canjea por la red interna (`127.0.0.1:8093`).
 - El vídeo no puede usar ese ticket, porque el reproductor pide decenas de ficheros por minuto. En su lugar, la misma llamada devuelve un token firmado con HMAC-SHA256 y 10 minutos de validez, que el reproductor añade solo a la playlist. Al servirla, el origen deja una cookie `HttpOnly` atada a `/hls/<sesión>/`, y es la cookie la que autoriza el `init`, los segmentos y las partes: sus URLs quedan limpias e iguales para todos, así que un CDN las cachea sin mirar el token. El repetidor valida la firma con la clave compartida, sin consultar a nadie, y la web renueva el token antes de que caduque.
 - Esa clave está en `/etc/mestisexo/hls.env` (root, 600; plantilla en `deploy/hls.env.example`), en un fichero aparte para que el repetidor no vea las claves de Discord ni las de pagos. La leen los dos servicios como `HLS_SECRET`, nunca por la línea de órdenes. Mínimo 32 caracteres. Sin ella, el vídeo queda accesible a quien tenga la URL y el repetidor lo avisa al arrancar.
-- La web vive en `/srv/mestisexo/web` (es la carpeta `ui/`). Caddy la sirve, reenvía `/ws` al repetidor y `/hls/*` al origen de vídeo, así que todo va cifrado.
+- La web vive en `/srv/mestisexo/web` (es la carpeta `ui/dist/`, ya compilada). Caddy la sirve, reenvía `/ws` al repetidor y `/hls/*` al origen de vídeo, así que todo va cifrado.
 
 ### Tiempo real
 

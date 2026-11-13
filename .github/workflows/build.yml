@@ -19,11 +19,25 @@ jobs:
           targets: x86_64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Web de los espectadores
+        working-directory: ui
+        run: |
+          npm ci
+          npm run check
+          npm test
+          npm run build
+
       - name: Repetidor, servicio de cuentas y web para el VPS
         run: |
           sudo apt-get update && sudo apt-get install -y musl-tools
           cargo build --release -p mestisexo-core -p mestisexo-auth --bin mestisexo-repeater --bin mestisexo-auth --target x86_64-unknown-linux-musl
-          mkdir -p target/vps && rm -rf target/web && cp -r ui target/web
+          mkdir -p target/vps && rm -rf target/web && cp -r ui/dist target/web
           tar -czf target/vps/mestisexo-vps-x86_64-linux.tar.gz \
             -C target/x86_64-unknown-linux-musl/release mestisexo-repeater mestisexo-auth \
             -C "$GITHUB_WORKSPACE/deploy" . \

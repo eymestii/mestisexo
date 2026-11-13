@@ -20,15 +20,15 @@
 	}
 	handle {
 		root * /srv/mestisexo/web
-		# hls.js y la licencia no cambian nunca para una misma versión, así
-		# que se cachean para siempre. El HTML sí cambia, y la versión en la
-		# URL de app.js y style.css obliga a recargarlos cuando toca.
+		# Lo que hay en /assets/* lleva un hash del contenido en el nombre: si
+		# cambia, cambia la URL, así que se cachea para siempre. El HTML sí
+		# cambia y es el que apunta a los nombres nuevos, así que no-cache.
 		#
 		# Los dos matchers son excluyentes a propósito: con un `header` sin
-		# matcher, el no-cache pisaría al de /vendor/* sin importar el orden.
-		@vendor path /vendor/*
-		@resto not path /vendor/*
-		header @vendor Cache-Control "public, max-age=31536000, immutable"
+		# matcher, el no-cache pisaría al de /assets/* sin importar el orden.
+		@assets path /assets/*
+		@resto not path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
 		header @resto Cache-Control "no-cache"
 		header {
 			Referrer-Policy "no-referrer"

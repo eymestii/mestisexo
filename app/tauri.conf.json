@@ -4,7 +4,10 @@
   "version": "0.5.1",
   "identifier": "com.mestisexo.stream",
   "build": {
-    "frontendDist": "../ui"
+    "frontendDist": "../ui/dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": { "script": "npm run dev", "cwd": "../ui" },
+    "beforeBuildCommand": { "script": "npm ci && npm run build", "cwd": "../ui" }
   },
   "app": {
     "withGlobalTauri": true,
