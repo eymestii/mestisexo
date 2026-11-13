@@ -110,9 +110,10 @@ function loadHls() {
 }
 
 // ---------- Acceso al vídeo ----------
-// La playlist y los trozos van firmados con un token con caducidad: el ticket
-// de un solo uso del chat no sirve aquí, porque el reproductor pide decenas de
-// ficheros por minuto.
+// La playlist pide un token con caducidad; el ticket de un solo uso del chat no
+// sirve aquí, porque el reproductor pide decenas de ficheros por minuto. El
+// origen deja además una cookie atada a la sesión, y es la cookie la que
+// autoriza los trozos: sus URLs no llevan nada y las puede cachear un CDN.
 
 let livePath = null;    // /hls/<sesión>/live.m3u8, lo anuncia el repetidor
 let videoToken = null;

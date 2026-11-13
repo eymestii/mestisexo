@@ -10,12 +10,19 @@
 //! Lo que el espectador descarga (segmentos, partes, init) no cambia nunca
 //! para una misma URL, así que se puede cachear para siempre. Lo único que
 //! caduca es la playlist.
+//!
+//! El permiso viaja en la playlist (`?t=`, el token que firma el servicio de
+//! cuentas). Al servirla, el origen deja además una cookie atada a
+//! `/hls/<sesión>/`: las URLs de media quedan limpias e idénticas para todos
+//! los espectadores, y el navegador manda la cookie solo al pedirlas. Así
+//! funciona igual en Chrome, Firefox y Safari nativo, y un CDN puede cachear
+//! los trozos sin mirar el token.
 
 use crate::video::{be32, children};
 use crate::{FRAG_KEY, INIT};
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
@@ -281,8 +288,9 @@ struct Payload {
 /// Comprueba el token que firma el servicio de cuentas. El ticket de un solo
 /// uso del WebSocket no sirve aquí: el reproductor pide decenas de URLs por
 /// minuto, así que lleva un token con caducidad que se valida sin consultar a
-/// nadie. Como el contenido no depende de quién lo pida, el CDN debe dejar
-/// este parámetro fuera de la clave de caché.
+/// nadie. Solo la playlist lo necesita; de ahí sale la cookie que autoriza el
+/// resto de peticiones, así que las URLs de los trozos no llevan nada y el CDN
+/// las puede cachear tal cual.
 #[doc(hidden)]
 pub fn token_ok(secret: &[u8], token: Option<&str>) -> bool {
     let Some(token) = token else { return false };
@@ -294,6 +302,13 @@ pub fn token_ok(secret: &[u8], token: Option<&str>) -> bool {
         return false;
     }
     serde_json::from_slice::<Payload>(&raw).is_ok_and(|p| p.e > crate::now_ms() / 1000)
+}
+
+/// Caducidad de un token ya validado, para que la cookie dure lo mismo que él.
+fn token_exp(token: &str) -> Option<u64> {
+    let (payload, _) = token.split_once('.')?;
+    let raw = B64.decode(payload).ok()?;
+    serde_json::from_slice::<Payload>(&raw).ok().map(|p| p.e)
 }
 
 /// Firma un token de acceso. La usa el servicio de cuentas; vive aquí para que
@@ -319,6 +334,19 @@ struct Q {
 /// Inmutable: el contenido de estas URLs no cambia nunca, así que el CDN y el
 /// navegador se lo pueden quedar y el origen deja de verlas.
 const IMMUTABLE: &str = "public, max-age=31536000, immutable";
+/// Nombre de la cookie que autoriza las peticiones de media.
+const COOKIE: &str = "hls";
+
+/// Cookie atada a la sesión: el navegador la manda al pedir el init, los
+/// segmentos y las partes, y a nada más del sitio. Se renueva con cada
+/// playlist, que es lo que pide el reproductor cuando el token va a caducar.
+fn session_cookie(token: &str, session: &str) -> Option<HeaderValue> {
+    let left = token_exp(token)?.saturating_sub(crate::now_ms() / 1000);
+    HeaderValue::from_str(&format!(
+        "{COOKIE}={token}; Path=/hls/{session}/; HttpOnly; Secure; SameSite=Lax; Max-Age={left}"
+    ))
+    .ok()
+}
 
 fn media(body: Bytes) -> Response {
     (
@@ -341,18 +369,35 @@ fn msn_of(name: &str) -> Option<u64> {
     name.strip_suffix(".m4s")?.parse().ok()
 }
 
-fn allowed(hls: &Hls, session: &str, q: &Q) -> bool {
+/// Token que autoriza la petición: el de la playlist (`?t=`, el que entrega
+/// `/api/ticket`) o el de la cookie que el propio origen dejó al servirla.
+fn request_token(q: &Q, headers: &HeaderMap) -> Option<String> {
+    if q.t.is_some() {
+        return q.t.clone();
+    }
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(';'))
+        .filter_map(|kv| kv.trim().split_once('='))
+        .find(|(k, _)| *k == COOKIE)
+        .map(|(_, v)| v.to_string())
+}
+
+fn allowed(hls: &Hls, session: &str, token: Option<&str>) -> bool {
     if hls.lock().session != session {
         return false;
     }
     match &hls.secret {
-        Some(s) => token_ok(s, q.t.as_deref()),
+        Some(s) => token_ok(s, token),
         None => true,
     }
 }
 
-async fn playlist(State(hls): State<Arc<Hls>>, Path(session): Path<String>, Query(q): Query<Q>) -> Response {
-    if !allowed(&hls, &session, &q) {
+async fn playlist(State(hls): State<Arc<Hls>>, Path(session): Path<String>, Query(q): Query<Q>, headers: HeaderMap) -> Response {
+    let token = request_token(&q, &headers);
+    if !allowed(&hls, &session, token.as_deref()) {
         return if hls.lock().session == session { deny() } else { gone() };
     }
     // Recarga bloqueante: el reproductor dice qué parte espera y la respuesta
@@ -367,7 +412,7 @@ async fn playlist(State(hls): State<Arc<Hls>>, Path(session): Path<String>, Quer
     if session_now != session {
         return gone();
     }
-    (
+    let mut res = (
         [
             (header::CONTENT_TYPE, HeaderValue::from_static("application/vnd.apple.mpegurl")),
             // La playlist cambia cada parte: que nadie la guarde.
@@ -375,11 +420,18 @@ async fn playlist(State(hls): State<Arc<Hls>>, Path(session): Path<String>, Quer
         ],
         body,
     )
-        .into_response()
+        .into_response();
+    // Es la única petición que lleva el token en la URL; de aquí sale la
+    // cookie con la que el reproductor pedirá los trozos.
+    if let Some(cookie) = token.as_deref().and_then(|t| session_cookie(t, &session)) {
+        res.headers_mut().insert(header::SET_COOKIE, cookie);
+    }
+    res
 }
 
-async fn init(State(hls): State<Arc<Hls>>, Path(session): Path<String>, Query(q): Query<Q>) -> Response {
-    if !allowed(&hls, &session, &q) {
+async fn init(State(hls): State<Arc<Hls>>, Path(session): Path<String>, Query(q): Query<Q>, headers: HeaderMap) -> Response {
+    let token = request_token(&q, &headers);
+    if !allowed(&hls, &session, token.as_deref()) {
         return deny();
     }
     match hls.lock().init.clone() {
@@ -388,8 +440,9 @@ async fn init(State(hls): State<Arc<Hls>>, Path(session): Path<String>, Query(q)
     }
 }
 
-async fn segment(State(hls): State<Arc<Hls>>, Path((session, name)): Path<(String, String)>, Query(q): Query<Q>) -> Response {
-    if !allowed(&hls, &session, &q) {
+async fn segment(State(hls): State<Arc<Hls>>, Path((session, name)): Path<(String, String)>, Query(q): Query<Q>, headers: HeaderMap) -> Response {
+    let token = request_token(&q, &headers);
+    if !allowed(&hls, &session, token.as_deref()) {
         return deny();
     }
     let Some(msn) = msn_of(&name) else { return gone() };
@@ -399,8 +452,9 @@ async fn segment(State(hls): State<Arc<Hls>>, Path((session, name)): Path<(Strin
     }
 }
 
-async fn part(State(hls): State<Arc<Hls>>, Path((session, msn, name)): Path<(String, u64, String)>, Query(q): Query<Q>) -> Response {
-    if !allowed(&hls, &session, &q) {
+async fn part(State(hls): State<Arc<Hls>>, Path((session, msn, name)): Path<(String, u64, String)>, Query(q): Query<Q>, headers: HeaderMap) -> Response {
+    let token = request_token(&q, &headers);
+    if !allowed(&hls, &session, token.as_deref()) {
         return deny();
     }
     let Some(idx) = name.strip_suffix(".m4s").and_then(|n| n.parse::<usize>().ok()) else { return gone() };

@@ -34,6 +34,12 @@ async fn get(url: &str) -> (u16, Vec<u8>, String) {
     (status, r.bytes().await.expect("cuerpo").to_vec(), cache)
 }
 
+/// Como `get`, pero con la cookie que el navegador mandaría solo.
+async fn get_with_cookie(url: &str, cookie: &str) -> (u16, Vec<u8>) {
+    let r = reqwest::Client::new().get(url).header("cookie", cookie).send().await.expect("petición");
+    (r.status().as_u16(), r.bytes().await.expect("cuerpo").to_vec())
+}
+
 #[tokio::test]
 async fn el_reproductor_descarga_todo_lo_anunciado() {
     let frames = t::split_frames(&sample_mp4(6));
@@ -128,6 +134,54 @@ async fn sin_token_no_hay_video() {
         assert_eq!(get(&format!("{base}/hls/{session}/{uri}?t={bueno}")).await.0, 200, "{uri}");
         assert_eq!(get(&format!("{base}/hls/{session}/{uri}")).await.0, 403, "{uri} sin token");
     }
+}
+
+#[tokio::test]
+async fn la_playlist_deja_una_cookie_que_abre_los_trozos() {
+    let secret = b"una clave de al menos treinta y dos bytes";
+    let frames = t::split_frames(&sample_mp4(6));
+    let hls = Packager::with_secret(secret);
+    for (k, d) in &frames {
+        hls.push_frame(*k, d);
+    }
+    let base = hls.serve_local().await;
+    let session = hls.session();
+
+    let ahora = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let bueno = mestisexo_core::sign_token(secret, ahora + 600).unwrap();
+
+    // El reproductor pide la playlist con el token y el origen deja la cookie.
+    let r = reqwest::get(format!("{base}/hls/{session}/live.m3u8?t={bueno}")).await.expect("playlist");
+    assert_eq!(r.status().as_u16(), 200);
+    let set_cookie = r.headers().get("set-cookie").expect("debe dejar cookie").to_str().unwrap().to_string();
+    assert!(set_cookie.starts_with(&format!("hls={bueno};")), "{set_cookie}");
+    assert!(set_cookie.contains(&format!("Path=/hls/{session}/")), "la cookie no se limita a la sesión: {set_cookie}");
+    assert!(set_cookie.contains("HttpOnly") && set_cookie.contains("Secure"), "{set_cookie}");
+    let cookie = set_cookie.split(';').next().unwrap().to_string();
+    let m = String::from_utf8(r.bytes().await.unwrap().to_vec()).unwrap();
+
+    // Con la cookie y sin token en la URL, todo se descarga: es lo que hace el
+    // navegador al pedir init, segmentos y partes.
+    let (code, init) = get_with_cookie(&format!("{base}/hls/{session}/init.mp4"), &cookie).await;
+    assert_eq!(code, 200);
+    assert!(!init.is_empty());
+    for uri in uris(&m).into_iter().take(4) {
+        let (code, body) = get_with_cookie(&format!("{base}/hls/{session}/{uri}"), &cookie).await;
+        assert_eq!(code, 200, "{uri} con cookie devolvió {code}");
+        assert!(!body.is_empty(), "{uri} vacío");
+    }
+
+    // Sin cookie y sin token sigue cerrado. El `Path` lo aplica el navegador;
+    // el servidor lo que comprueba es la firma del token que traiga la cookie.
+    assert_eq!(get(&format!("{base}/hls/{session}/init.mp4")).await.0, 403);
+    let falsa = format!("hls={}.AAAA", bueno.split('.').next().unwrap());
+    assert_eq!(get_with_cookie(&format!("{base}/hls/{session}/init.mp4"), &falsa).await.0, 403);
+
+    // La cookie caduca con el token, no antes.
+    let caducado = mestisexo_core::sign_token(secret, ahora - 1).unwrap();
+    let r = reqwest::get(format!("{base}/hls/{session}/live.m3u8?t={caducado}")).await.expect("playlist");
+    assert_eq!(r.status().as_u16(), 403);
+    assert!(r.headers().get("set-cookie").is_none(), "un token caducado no debe dejar cookie");
 }
 
 #[tokio::test]
