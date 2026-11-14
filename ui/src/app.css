@@ -70,7 +70,10 @@ header #viewers { margin-right: auto; }
 
 /* Móviles: márgenes de la muesca, cabecera que no desborda y textos legibles. */
 body.web #live { height: 100dvh; padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); }
-body.web #chat-form { padding-bottom: env(safe-area-inset-bottom); }
+/* Web: campo de texto arriba, mensajes en medio y banner abajo. */
+body.web #chat-form { order: 1; border-top: 0; border-bottom: 1px solid var(--line); }
+body.web #messages { order: 2; }
+body.web .chat-head { order: 3; flex: 0 0 auto; border-bottom: 0; border-top: 1px solid var(--line); padding-bottom: max(10px, env(safe-area-inset-bottom)); }
 @media (max-width: 760px) {
   header { gap: 8px; overflow-x: auto; }
   header #viewers { white-space: nowrap; }
