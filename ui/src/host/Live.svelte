@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import Chat from "../components/Chat.svelte";
-  import { ChatConnection, viewersLabel } from "../lib/chat.svelte";
+  import { ChatConnection } from "../lib/chat.svelte";
   import { invoke } from "../lib/tauri";
   import type { HostSession } from "../lib/types";
 
@@ -31,7 +31,7 @@
   <header>
     <button onclick={leave}>Salir</button>
     <span class="badge" class:on={live}>{live ? "EN VIVO" : "OFFLINE"}</span>
-    <span id="viewers">{viewersLabel(chat.viewers)}</span>
+    <span id="viewers" title="Espectadores">{chat.viewers}</span>
   </header>
   <div class="main">
     <Chat {chat} />

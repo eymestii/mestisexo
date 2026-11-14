@@ -19,7 +19,7 @@ input { background: #0e0e10; border: 1px solid var(--line); border-radius: 6px; 
 .screen label { display: flex; flex-direction: column; gap: 6px; color: var(--muted); }
 .row { display: flex; gap: 10px; justify-content: flex-end; }
 
-#live { display: flex; flex-direction: column; height: 100vh; }
+#live { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 header { display: flex; align-items: center; gap: 14px; height: var(--head); flex: 0 0 auto; padding: 0 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
 #status { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .badge { background: #444; border-radius: 4px; padding: 2px 8px; font-weight: 700; font-size: 12px; }
@@ -53,13 +53,14 @@ header #viewers { margin-right: auto; }
 }
 .chat-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--line); }
 .chat-head a { color: inherit; }
-#messages { list-style: none; margin: 0; padding: 8px 12px; flex: 1; overflow-y: auto; overflow-wrap: anywhere; }
+#messages { list-style: none; margin: 0; padding: 8px 12px; flex: 1; min-height: 0; overflow-y: auto; overflow-wrap: anywhere; }
 #messages li { padding: 3px 0; }
 #messages .n { font-weight: 700; margin-right: 4px; }
 #messages .host .n::after { content: " ★"; color: var(--accent); }
 #messages .sys { color: var(--muted); font-style: italic; }
-#chat-form { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); }
-#chat-form .send { background: #f60; color: #fff; font-weight: 600; }
+#chat-form { display: flex; flex: 0 0 auto; border-top: 1px solid var(--line); }
+#chat-form input { border: 0; border-radius: 0; padding: 12px; }
+#chat-form .send { background: #f60; color: #fff; font-weight: 600; border-radius: 0; padding: 0 20px; }
 #chat-form .send:hover { background: #ff7a1f; }
 #messages .sub, .account .sub { background: var(--accent); color: #fff; border-radius: 3px; padding: 0 4px; margin-right: 4px; font-size: 10px; font-weight: 700; vertical-align: 1px; }
 .login { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: rgba(0, 0, 0, .85); text-align: center; padding: 20px; }
@@ -69,7 +70,7 @@ header #viewers { margin-right: auto; }
 
 /* Móviles: márgenes de la muesca, cabecera que no desborda y textos legibles. */
 body.web #live { height: 100dvh; padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); }
-body.web #chat-form { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+body.web #chat-form { padding-bottom: env(safe-area-inset-bottom); }
 @media (max-width: 760px) {
   header { gap: 8px; overflow-x: auto; }
   header #viewers { white-space: nowrap; }
@@ -80,4 +81,4 @@ body.web #chat-form { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
 /* Streamer: solo el chat, a todo el ancho. El vídeo se ve en la web. */
 #live.host .left { display: none; }
 #live.host .main { flex-direction: column; }
-#live.host .chat { width: auto; flex: 1; border-left: 0; }
+#live.host .chat { width: auto; flex: 1; min-height: 0; border-left: 0; }

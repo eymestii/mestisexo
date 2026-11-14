@@ -259,6 +259,10 @@
         {/if}
       </div>
     </div>
-    <Chat {chat} />
+    <Chat {chat}>
+      <div class="chat-head">
+        <b>Con el apoyo de <a href="https://roky.cloud" target="_blank" rel="noopener">roky.cloud</a></b>
+      </div>
+    </Chat>
   </div>
 </section>
