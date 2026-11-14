@@ -60,7 +60,8 @@ def duration(seconds):
 
 def post(content):
     """Publica en el webhook. Reintenta ante fallos de red, 5xx y 429."""
-    body = json.dumps({"content": content, "allowed_mentions": {"parse": []}}).encode()
+    # Solo se permite @everyone, que va en los textos de los avisos.
+    body = json.dumps({"content": content, "allowed_mentions": {"parse": ["everyone"]}}).encode()
     deadline = time.monotonic() + POST_DEADLINE
     wait = 2
     while True:
@@ -97,12 +98,12 @@ def handle(ev, state):
     since, live = int(ev.get("since", 0)), bool(ev.get("live"))
     if live and (since != state["since"] or not state["live"]):
         link = f"\n{STREAM_URL}" if STREAM_URL else ""
-        if post(f"🔴 **Empezó el directo**{link}"):
+        if post(f"🔴 **Empezó el directo** @everyone{link}"):
             log(f"Aviso de inicio publicado ({since})")
         state.update(since=since, live=True)
         save_state(state)
     elif not live and since and since == state["since"] and state["live"]:
-        if post(f"⚫ **Terminó el directo** (duró {duration(int(ev.get('duration_s', 0)))})"):
+        if post(f"⚫ **Terminó el directo** @everyone (duró {duration(int(ev.get('duration_s', 0)))})"):
             log(f"Aviso de fin publicado ({since})")
         state.update(live=False)
         save_state(state)
