@@ -85,3 +85,6 @@ body.web .chat-head { order: 3; flex: 0 0 auto; border-bottom: 0; border-top: 1p
 #live.host .left { display: none; }
 #live.host .main { flex-direction: column; }
 #live.host .chat { width: auto; flex: 1; min-height: 0; border-left: 0; }
+/* Streamer: input y botón arriba, justo bajo el banner. */
+#live.host #chat-form { order: 1; border-top: 0; border-bottom: 1px solid var(--line); }
+#live.host #messages { order: 2; }
